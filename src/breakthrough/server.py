@@ -27,7 +27,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__, dashboard, sessions, translate
-from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, stream_events
+from .claude import ClaudeError, DEFAULT_MODEL, WEB_ENABLED, run_blocking, run_web, stream_events
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
 API_KEY = os.environ.get("BREAKTHROUGH_API_KEY")
@@ -171,6 +171,13 @@ class Handler(BaseHTTPRequestHandler):
         prompt = translate.messages_to_prompt(messages)
         linked = sessions.session_mode_enabled()  # key-linked session?
 
+        # Web mode runs the agentic loop and reshapes its tool blocks into the
+        # API's `web_search` content. Both stream and non-stream go through it.
+        if WEB_ENABLED:
+            if body.get("stream"):
+                return self._stream_web(prompt, model, system, key if linked else None)
+            return self._blocking_web(prompt, model, system, key if linked else None)
+
         if body.get("stream"):
             return self._stream_messages(prompt, model, system, key if linked else None)
 
@@ -182,6 +189,75 @@ class Handler(BaseHTTPRequestHandler):
         except ClaudeError as e:
             return self._send_error(500, "api_error", str(e))
         self._send_json(200, translate.wrapper_to_message(wrapper, model))
+
+    # ---- web search (opt-in) ------------------------------------------------
+
+    def _run_web_linked(self, prompt, model, system, key):
+        """Drive a web-enabled run, handling key-session lock/resume/retry.
+
+        `key` is None in stateless mode. Mirrors the stale-session recovery of
+        _blocking_session: a bad session id is reset and retried once; a
+        transient error propagates without destroying the link."""
+        linked = key is not None
+        cwd = str(sessions.WORKSPACE) if linked else None
+        lock = sessions.key_lock(key) if linked else None
+        if lock:
+            lock.acquire()
+        try:
+            resume_id = sessions.get_session_id(key) if linked else None
+            try:
+                blocks, wrapper, sid = run_web(prompt, model=model, system=system,
+                                               resume=resume_id, persist=linked, cwd=cwd)
+            except ClaudeError as e:
+                if not (linked and resume_id and _is_invalid_session_error(str(e))):
+                    raise
+                sessions.forget_session(key)
+                blocks, wrapper, sid = run_web(prompt, model=model, system=system,
+                                               resume=None, persist=True, cwd=cwd)
+            if linked and sid:
+                sessions.record_session(key, sid)
+            return blocks, wrapper
+        finally:
+            if lock:
+                lock.release()
+
+    def _blocking_web(self, prompt, model, system, key):
+        try:
+            blocks, wrapper = self._run_web_linked(prompt, model, system, key)
+        except ClaudeError as e:
+            return self._send_error(500, "api_error", str(e))
+        self._send_json(200, translate.web_message(blocks, wrapper, model))
+
+    def _stream_web(self, prompt, model, system, key):
+        # The web run is buffered (the agentic loop can't be a single live
+        # stream), so do the work first; a failure here can still be a clean
+        # JSON error since no SSE headers have been sent yet.
+        try:
+            blocks, wrapper = self._run_web_linked(prompt, model, system, key)
+        except ClaudeError as e:
+            return self._send_error(500, "api_error", str(e))
+
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def sse(event_type, data):
+            chunk = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+            self.wfile.write(chunk.encode())
+            self.wfile.flush()
+
+        content = translate.web_blocks_to_content(blocks)
+        usage = translate.web_usage(wrapper)
+        stop_reason = wrapper.get("stop_reason") or "end_turn"
+        message_id = translate._message_id(wrapper)
+        try:
+            for event_type, data in translate.web_sse_events(content, usage, stop_reason, model, message_id):
+                sse(event_type, data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client hung up mid-stream
 
     def _blocking_session(self, prompt, model, system, key):
         """Run linked to the key's session: resume it, persist, serialize."""

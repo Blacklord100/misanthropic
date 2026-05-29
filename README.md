@@ -192,6 +192,28 @@ Environment variables:
   (same as `breakthrough keys add`).
 - `BREAKTHROUGH_HOME` — where keys/sessions/workspace state lives. Defaults to
   `~/.breakthrough`.
+- `BREAKTHROUGH_WEB` — set to `1` to enable web search (see below). Off by default.
+- `BREAKTHROUGH_WEB_MAX_TURNS` — agentic turn cap when web is on. Defaults `16`.
+
+## Web search (opt-in)
+
+By default the proxy has no internet access — exactly like the bare Messages API.
+Set `BREAKTHROUGH_WEB=1` and the server enables the CLI's `WebSearch` tool, then
+remaps the result into the **API's own `web_search` content shape**:
+
+```bash
+BREAKTHROUGH_WEB=1 breakthrough serve
+```
+
+Responses then contain `server_tool_use` (name `web_search`),
+`web_search_tool_result` (with `web_search_result` items), and `text` blocks —
+the same structure the hosted API returns — for both streaming and non-streaming.
+`usage.server_tool_use.web_search_requests` is populated.
+
+Honest gaps (unavoidable from CLI output): `encrypted_content` is synthesized and
+**not** reusable against the hosted API, `page_age` and text `citations` are
+`null`, and web responses are buffered (correct block shape, but no token-by-token
+streaming timing).
 
 ## How it works
 
@@ -227,7 +249,8 @@ hosted API:
 - **`max_tokens`, `temperature`, `top_p`, `stop_sequences`** are accepted but not
   enforced — the CLI doesn't expose those knobs in print mode.
 - **`tools` (function calling)** and **image inputs** aren't supported; image
-  blocks are dropped with a placeholder.
+  blocks are dropped with a placeholder. (Web search is supported separately —
+  see above.)
 - **`count_tokens`** is an estimate, not the exact server-side tokenizer.
 - Multi-turn history is flattened into one prompt (works well; not a stateful
   agent session).
