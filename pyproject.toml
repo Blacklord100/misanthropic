@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "breakthrough"
-version = "0.3.1"
+version = "0.4.0"
 description = "Anthropic-API-compatible server backed by your local Claude Code CLI. No API key."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,8 +20,13 @@ classifiers = [
 # using the login the user already has. Nothing to install, no API key.
 dependencies = []
 
+# The core (server + CLI) has zero runtime deps. The menu-bar app adds rumps.
+[project.optional-dependencies]
+app = ["rumps>=0.4"]
+
 [project.scripts]
 breakthrough = "breakthrough.cli:main"
+breakthrough-app = "breakthrough.app:main"
 
 [project.urls]
 Homepage = "https://github.com/Blacklord100/breakthrough-cli"

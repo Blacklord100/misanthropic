@@ -86,6 +86,34 @@ sequence (`message_start`, `content_block_delta`, …, `message_stop`).
 breakthrough chat "Write a haiku about terminals"
 ```
 
+## Desktop app (macOS menu bar)
+
+Prefer a launch-and-forget app over a terminal? There's a menu-bar app that
+supervises the server and gives you a dashboard for keys/projects.
+
+```bash
+bash packaging/build.sh        # -> dist/Breakthrough.app
+open dist/Breakthrough.app
+```
+
+It lives in the menu bar (no Dock icon): start/stop the server, open the
+dashboard, copy the base URL, and toggle "start at login". The dashboard
+(also at `http://127.0.0.1:8787/` whenever the server runs) lets you:
+
+- generate per-project API keys (formatted `sk-ant-local-…` so they drop into
+  any Anthropic-SDK tooling),
+- copy ready-to-paste connection snippets (`ANTHROPIC_BASE_URL` + key),
+- see and delete keys / conversations.
+
+Each generated key is an approved session key (see below), so connecting a
+project and getting persistent memory is one click. The admin/dashboard endpoints
+are **localhost-only**. To run the app from source without building:
+`pip install "breakthrough[app]" && breakthrough-app`.
+
+For signing/notarizing to share the app with others, see
+[packaging/DISTRIBUTION.md](packaging/DISTRIBUTION.md). Note: the app uses each
+user's *own* local Claude login — you ship the tool, not your subscription.
+
 ## Key-linked sessions (stateful conversations)
 
 By default the server is **stateless** — like the hosted API, each request is

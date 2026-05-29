@@ -13,6 +13,7 @@ State lives under ~/.breakthrough (override with BREAKTHROUGH_HOME):
 
 import json
 import os
+import secrets
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,17 +48,35 @@ def _write_json(path, data):
 
 
 # ---- approved keys ----------------------------------------------------------
+#
+# keys.json is a dict: { "<key>": {"label": str, "created": iso} }. Older
+# list-format files (["k1", "k2"]) are still read and migrated on next write.
+
+KEY_PREFIX = "sk-ant-local-"
+
+
+def _read_keys():
+    """Return the keys store as a {key: meta} dict, migrating legacy list form."""
+    stored = _read_json(KEYS_FILE, {})
+    if isinstance(stored, list):
+        return {str(k): {"label": "", "created": ""} for k in stored}
+    if isinstance(stored, dict):
+        return stored
+    return {}
+
 
 def approved_keys():
     """The set of approved keys, from BREAKTHROUGH_KEYS env and keys.json."""
-    keys = set()
+    keys = set(_read_keys().keys())
     env = os.environ.get("BREAKTHROUGH_KEYS")
     if env:
         keys |= {k.strip() for k in env.split(",") if k.strip()}
-    stored = _read_json(KEYS_FILE, [])
-    if isinstance(stored, list):
-        keys |= {str(k) for k in stored}
     return keys
+
+
+def keys_detail():
+    """{key: {label, created}} for every stored key (excludes env-only keys)."""
+    return _read_keys()
 
 
 def session_mode_enabled():
@@ -69,22 +88,32 @@ def is_approved(key):
     return key in approved_keys()
 
 
-def add_key(key):
+def generate_key():
+    """A fresh random key that looks like an Anthropic key (drops into tooling)."""
+    return KEY_PREFIX + secrets.token_urlsafe(24)
+
+
+def add_key(key, label=""):
     with _file_lock:
-        stored = _read_json(KEYS_FILE, [])
-        if not isinstance(stored, list):
-            stored = []
-        if key not in stored:
-            stored.append(key)
-            _write_json(KEYS_FILE, stored)
+        store = _read_keys()
+        if key not in store:
+            store[key] = {"label": label, "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+            _write_json(KEYS_FILE, store)
+
+
+def create_key(label=""):
+    """Generate, store, and return a new labeled key (for the dashboard / CLI)."""
+    key = generate_key()
+    add_key(key, label)
+    return key
 
 
 def remove_key(key):
     with _file_lock:
-        stored = _read_json(KEYS_FILE, [])
-        if isinstance(stored, list) and key in stored:
-            stored.remove(key)
-            _write_json(KEYS_FILE, stored)
+        store = _read_keys()
+        if key in store:
+            store.pop(key)
+            _write_json(KEYS_FILE, store)
         sessions = _read_json(SESSIONS_FILE, {})
         if key in sessions:
             sessions.pop(key)

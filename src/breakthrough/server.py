@@ -26,7 +26,7 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, sessions, translate
+from . import __version__, dashboard, sessions, translate
 from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, stream_events
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
@@ -59,6 +59,17 @@ class Handler(BaseHTTPRequestHandler):
     def _send_error(self, status, etype, message):
         self._send_json(status, {"type": "error", "error": {"type": etype, "message": message}})
 
+    def _send_html(self, html):
+        data = html.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _is_local(self):
+        return self.client_address[0] in ("127.0.0.1", "::1", "localhost")
+
     def _client_key(self):
         key = self.headers.get("x-api-key") or ""
         auth = self.headers.get("authorization") or ""
@@ -74,19 +85,59 @@ class Handler(BaseHTTPRequestHandler):
     # ---- routes -------------------------------------------------------------
 
     def do_GET(self):
-        if self.path.split("?")[0] in ("/", "/health"):
-            self._send_json(200, {
+        path = self.path.split("?")[0]
+        if path == "/":
+            return self._send_html(dashboard.PAGE)
+        if path == "/health":
+            return self._send_json(200, {
                 "status": "ok",
                 "service": "breakthrough",
                 "version": __version__,
                 "backend": "claude-code-cli",
                 "mode": "session" if sessions.session_mode_enabled() else "stateless",
             })
-        else:
-            self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
+        if path == "/admin/state":
+            if not self._is_local():
+                return self._send_error(403, "permission_error", "Admin API is local-only.")
+            return self._send_json(200, self._admin_state())
+        self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
+
+    def _admin_state(self):
+        detail = sessions.keys_detail()
+        sess = sessions.all_sessions()
+        keys = [{
+            "key": k,
+            "label": meta.get("label", ""),
+            "created": meta.get("created", ""),
+            "turns": sess.get(k, {}).get("turns", 0),
+        } for k, meta in detail.items()]
+        return {
+            "mode": "session" if sessions.session_mode_enabled() else "stateless",
+            "version": __version__,
+            "keys": keys,
+        }
 
     def do_POST(self):
         path = self.path.split("?")[0]
+
+        # Admin (management) routes are localhost-only and bypass API-key auth.
+        if path.startswith("/admin/"):
+            if not self._is_local():
+                return self._send_error(403, "permission_error", "Admin API is local-only.")
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            if path == "/admin/keys":
+                key = sessions.create_key(str(body.get("label", "")).strip())
+                return self._send_json(200, {"key": key})
+            if path == "/admin/keys/delete":
+                sessions.remove_key(str(body.get("key", "")))
+                return self._send_json(200, {"ok": True})
+            if path == "/admin/sessions/forget":
+                sessions.forget_session(str(body.get("key", "")))
+                return self._send_json(200, {"ok": True})
+            return self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
 
         # Auth differs by mode. In session mode the key must be approved; in
         # stateless mode the optional single secret applies.
@@ -203,6 +254,11 @@ class Handler(BaseHTTPRequestHandler):
                 lock.release()
 
 
+def make_httpd(host="127.0.0.1", port=8787):
+    """Create (but don't start) the server — lets the menu-bar app supervise it."""
+    return ThreadingHTTPServer((host, port), Handler)
+
+
 def serve(host="127.0.0.1", port=8787):
     # Refuse to run session mode on a non-local interface without a workspace —
     # agentic persistence over the network is a foot-gun.
@@ -211,7 +267,7 @@ def serve(host="127.0.0.1", port=8787):
         print(f"refusing to bind session mode to {host}: only approved keys gate access; "
               f"expose deliberately.", file=sys.stderr)
 
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd = make_httpd(host, port)
     base = f"http://{host}:{port}"
     print(f"breakthrough {__version__} — Anthropic-compatible API on {base}", file=sys.stderr)
     if session_mode:
