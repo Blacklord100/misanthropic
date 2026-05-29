@@ -94,7 +94,11 @@ def _spawn_claude(args, prompt, cwd):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            # See run_blocking: pin UTF-8 instead of relying on the locale, so
+            # the py2app .app (whose launchd-inherited locale is C/ASCII) can
+            # still decode emoji in claude's stream-json without crashing.
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             cwd=cwd,
         )
@@ -186,7 +190,13 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
             args,
             input=prompt,
             capture_output=True,
-            text=True,
+            # Pin UTF-8 explicitly. With plain `text=True` the encoding falls
+            # back to locale.getpreferredencoding(), which is ASCII in
+            # py2app-frozen .app launches (launchd doesn't inherit a UTF-8
+            # locale) — and any emoji in claude's output (e.g. "🩵") would
+            # trip a UnicodeDecodeError mid-response and 500 the request.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout if timeout is not None else GEN_TIMEOUT_S,
             cwd=cwd,
         )
