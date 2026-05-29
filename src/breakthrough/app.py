@@ -10,11 +10,13 @@ Requires `rumps` (an optional dependency): pip install "breakthrough[app]".
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import webbrowser
 from pathlib import Path
+from xml.sax.saxutils import escape
 
-from . import __version__, server, sessions
+from . import claude, server, sessions
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8787"))
@@ -26,6 +28,37 @@ LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.breakthrough.app.
 def _claude_ready():
     """Is the `claude` CLI installed? (Auth itself is checked on first request.)"""
     return shutil.which(os.environ.get("CLAUDE_BIN", "claude")) is not None
+
+
+def _running_app_bundle():
+    """If we're running inside a py2app-frozen .app, return its bundle path."""
+    if not getattr(sys, "frozen", False):
+        return None
+    for parent in Path(sys.executable).resolve().parents:
+        if parent.suffix == ".app":
+            return parent
+    return None
+
+
+def _login_program_args():
+    """LaunchAgent ProgramArguments that actually launch something that exists.
+
+    The old code hardcoded `open -a Breakthrough` against a bundle that didn't
+    exist (no packaging yet), so login launch silently did nothing. Now: prefer
+    the real .app bundle — the one we're frozen inside, or a built one in
+    /Applications or ~/Applications (see packaging/build.sh) — then fall back to
+    the console script, then a bare module run."""
+    bundles = [b for b in (
+        _running_app_bundle(),
+        Path("/Applications/Breakthrough.app"),
+        Path.home() / "Applications" / "Breakthrough.app",
+    ) if b and b.exists()]
+    if bundles:
+        return ["/usr/bin/open", str(bundles[0])]
+    exe = shutil.which("breakthrough-app")
+    if exe:
+        return [exe]
+    return [sys.executable, "-m", "breakthrough.app"]
 
 
 def _pbcopy(text):
@@ -52,10 +85,13 @@ def main():
             self.httpd = None
             self.thread = None
             self.toggle_item = rumps.MenuItem("Stop server", callback=self.toggle)
+            self.web_item = rumps.MenuItem("Web search (internet)", callback=self.toggle_web)
+            self.web_item.state = claude.web_enabled()
             self.login_item = rumps.MenuItem("Start at login", callback=self.toggle_login)
             self.login_item.state = LAUNCH_AGENT.exists()
             self.menu = [
                 self.toggle_item,
+                self.web_item,
                 rumps.MenuItem("Open dashboard", callback=self.open_dashboard),
                 rumps.MenuItem("Copy base URL", callback=self.copy_base_url),
                 None,
@@ -95,6 +131,16 @@ def main():
             self.stop_server() if self.httpd else self.start_server()
 
         # ---- menu actions ----
+        def toggle_web(self, sender):
+            new = not bool(sender.state)
+            claude.set_web_enabled(new)
+            sender.state = new
+            rumps.notification(
+                "Breakthrough",
+                "Web search " + ("enabled" if new else "disabled"),
+                "New requests can search the web." if new else "Back to text-only (bare API).",
+            )
+
         def open_dashboard(self, _):
             webbrowser.open(BASE_URL)
 
@@ -113,11 +159,12 @@ def main():
 
         def _install_login_agent(self):
             LAUNCH_AGENT.parent.mkdir(parents=True, exist_ok=True)
+            args_xml = "".join(f"<string>{escape(a)}</string>" for a in _login_program_args())
             plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.breakthrough.app</string>
-  <key>ProgramArguments</key><array><string>/usr/bin/open</string><string>-a</string><string>Breakthrough</string></array>
+  <key>ProgramArguments</key><array>{args_xml}</array>
   <key>RunAtLoad</key><true/>
 </dict></plist>
 """

@@ -28,9 +28,24 @@ NO_TOOLS = ""
 # API's `web_search` tool — and raise the turn cap so the agentic loop (search,
 # then answer) can complete instead of aborting at `--max-turns 1`. `WebSearch`
 # must also be in --allowedTools, else it is permission-denied in print mode.
-WEB_ENABLED = os.environ.get("BREAKTHROUGH_WEB", "").strip().lower() in ("1", "true", "yes", "on")
+#
+# The state is mutable (not a frozen constant) so the menu-bar app can toggle it
+# at runtime; BREAKTHROUGH_WEB only sets the initial value. The server reads it
+# per request via web_enabled(), so a flip takes effect on the next request.
 WEB_TOOLS = "WebSearch"
 WEB_MAX_TURNS = os.environ.get("BREAKTHROUGH_WEB_MAX_TURNS", "16")
+
+_web_enabled = os.environ.get("BREAKTHROUGH_WEB", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def web_enabled():
+    return _web_enabled
+
+
+def set_web_enabled(value):
+    global _web_enabled
+    _web_enabled = bool(value)
+    return _web_enabled
 
 # Claude Code's default `-p` system prompt is the full agentic prompt (memory,
 # tools, the user's env/identity). We always override it so the proxy behaves
