@@ -108,8 +108,8 @@ dashboard, copy the base URL, and toggle "start at login". The dashboard
 
 Each generated key is an approved session key (see below), so connecting a
 project and getting persistent memory is one click. The admin/dashboard endpoints
-are **localhost-only**. To run the app from source without building:
-`pip install "breakthrough[app]" && breakthrough-app`.
+are **localhost-only**. To run the app from source without building (from a clone):
+`pip install -e ".[app]" && breakthrough-app`.
 
 For signing/notarizing to share the app with others, see
 [packaging/DISTRIBUTION.md](packaging/DISTRIBUTION.md). Note: the app uses each
@@ -176,6 +176,11 @@ Concurrent requests sharing a key are serialized. Approve keys via the CLI or th
 | `POST` | `/v1/messages`              | Messages API. Streaming + non-streaming.     |
 | `POST` | `/v1/messages/count_tokens` | Approximate token count (~4 chars/token).    |
 | `GET`  | `/health`                   | Liveness check.                              |
+| `GET`  | `/`                         | Web dashboard (manage keys + sessions).      |
+| `GET`  | `/admin/state`              | Dashboard state (keys, sessions). **Localhost-only.** |
+| `POST` | `/admin/keys`               | Create a key. **Localhost-only.**            |
+| `POST` | `/admin/keys/delete`        | Remove a key. **Localhost-only.**            |
+| `POST` | `/admin/sessions/forget`    | Reset a key's session link. **Localhost-only.** |
 
 ## Config (all optional)
 
@@ -195,6 +200,8 @@ Environment variables:
   `~/.breakthrough`.
 - `BREAKTHROUGH_WEB` — set to `1` to enable web search (see below). Off by default.
 - `BREAKTHROUGH_WEB_MAX_TURNS` — agentic turn cap when web is on. Defaults `16`.
+- `BREAKTHROUGH_WEB_TIMEOUT_MS` — watchdog timeout for a web run (the loop can legitimately
+  take >120s, so this defaults to `600000` = 10 min; runaway runs are killed instead of hanging).
 
 ## Web search (opt-in)
 
@@ -225,7 +232,7 @@ prompt and runs your local Claude Code as a one-shot, tool-free subprocess:
 claude -p --max-turns 1 --tools "" \
   --system-prompt "<system or a neutral default>" --model <model> \
   --no-session-persistence \      # omitted (and --resume added) in session mode
-  --output-format json            # or stream-json for streaming
+  --output-format json            # or: stream-json --include-partial-messages --verbose
 ```
 
 The prompt is passed via **stdin** (no shell, no injection). Two flags make it
