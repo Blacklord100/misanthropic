@@ -24,7 +24,7 @@ dependencies = []
 breakthrough = "breakthrough.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/blacklord100/breakthrough"
+Homepage = "https://github.com/Blacklord100/breakthrough-cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/breakthrough"]
