@@ -15,10 +15,18 @@ import json
 import os
 import subprocess
 
-# Tools a pure text completion never needs. Disallowing them keeps every call a
-# fast, predictable, side-effect-free writing task — no file/web/agent access,
-# so the server behaves like a completion endpoint and not an autonomous agent.
-DISALLOWED_TOOLS = "Bash Edit Write Read Glob Grep WebFetch WebSearch Task NotebookEdit"
+# `--tools ""` REMOVES every tool from the model's available set, so it can only
+# produce text. This matters: `--disallowedTools` merely *denies* a tool, but the
+# model still *attempts* the call, which burns the single turn and aborts with
+# `error_max_turns` before any text is produced (e.g. "remember that" triggers an
+# internal memory Read). Removing tools makes it a clean completion endpoint.
+NO_TOOLS = ""
+
+# Claude Code's default `-p` system prompt is the full agentic prompt (memory,
+# tools, the user's env/identity). We always override it so the proxy behaves
+# like the bare Messages API; this neutral default is used when the client sends
+# no system prompt of its own (an empty override still leaks env context).
+DEFAULT_SYSTEM = "You are a helpful AI assistant."
 
 DEFAULT_MODEL = os.environ.get("BREAKTHROUGH_MODEL", os.environ.get("MODEL", "sonnet"))
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
@@ -34,7 +42,8 @@ def _base_args(model, system, resume=None, persist=False):
         CLAUDE_BIN,
         "-p",
         "--max-turns", "1",
-        "--disallowedTools", DISALLOWED_TOOLS,
+        "--tools", NO_TOOLS,
+        "--system-prompt", system if system else DEFAULT_SYSTEM,
     ]
     # Persist (and resume) when a request is linked to a key-session; otherwise
     # stay ephemeral so the proxy doesn't flood session history.
@@ -42,8 +51,6 @@ def _base_args(model, system, resume=None, persist=False):
         args += ["--no-session-persistence"]
     if resume:
         args += ["--resume", resume]
-    if system:
-        args += ["--system-prompt", system]
     if model:
         args += ["--model", model]
     return args
@@ -76,7 +83,9 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
         raise ClaudeError("Local Claude timed out. Try again or a faster model.")
 
     if proc.returncode != 0:
-        raise ClaudeError(proc.stderr.strip() or f"claude exited with code {proc.returncode}")
+        # claude often writes a JSON error to stdout (e.g. error_max_turns) while
+        # leaving stderr empty, so fall back to stdout for a useful message.
+        raise ClaudeError(proc.stderr.strip() or proc.stdout.strip() or f"claude exited with code {proc.returncode}")
 
     try:
         wrapper = json.loads(proc.stdout)

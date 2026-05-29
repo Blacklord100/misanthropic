@@ -33,6 +33,12 @@ from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, stream_events
 API_KEY = os.environ.get("BREAKTHROUGH_API_KEY")
 
 
+def _is_invalid_session_error(message):
+    """True if the error looks like a bad/missing session id (vs. transient)."""
+    m = message.lower()
+    return "resume" in m or "session id" in m or "no conversation found" in m
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"breakthrough/{__version__}"
     protocol_version = "HTTP/1.1"
@@ -135,9 +141,10 @@ class Handler(BaseHTTPRequestHandler):
                 wrapper = run_blocking(prompt, model=model, system=system,
                                        resume=resume_id, persist=True, cwd=cwd)
             except ClaudeError as e:
-                if not resume_id:
+                # Only start over if the session id is genuinely bad — a transient
+                # error (rate limit, backend hiccup) must NOT destroy the link.
+                if not resume_id or not _is_invalid_session_error(str(e)):
                     return self._send_error(500, "api_error", str(e))
-                # Stale/invalid session id — drop it and start fresh once.
                 sessions.forget_session(key)
                 try:
                     wrapper = run_blocking(prompt, model=model, system=system,

@@ -171,17 +171,25 @@ For each request, `breakthrough` flattens the `system` + `messages` into a singl
 prompt and runs your local Claude Code as a one-shot, tool-free subprocess:
 
 ```
-claude -p --max-turns 1 --no-session-persistence \
-  --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch Task NotebookEdit" \
-  --system-prompt "<system>" --model <model> \
+claude -p --max-turns 1 --tools "" \
+  --system-prompt "<system or a neutral default>" --model <model> \
+  --no-session-persistence \      # omitted (and --resume added) in session mode
   --output-format json            # or stream-json for streaming
 ```
 
-The prompt is passed via **stdin** (no shell, no injection), and all tools are
-disallowed so it stays a pure text completion — fast, predictable, no file or web
-access. For non-streaming, the CLI's JSON (`result`, `stop_reason`, `usage`) is
-reshaped into a Messages response. For streaming, the CLI emits the raw Anthropic
-stream events, which are forwarded verbatim as Server-Sent Events.
+The prompt is passed via **stdin** (no shell, no injection). Two flags make it
+behave like the bare Messages API rather than an agent:
+
+- `--tools ""` **removes** every tool from the model's set. (Merely *disallowing*
+  tools isn't enough — the model would still *attempt* a call, e.g. an internal
+  memory `Read` on "remember that", which burns the one turn and aborts with
+  `error_max_turns` before producing text.)
+- `--system-prompt` always overrides Claude Code's default agent prompt (which
+  otherwise injects memory behavior and your environment/identity).
+
+For non-streaming, the CLI's JSON (`result`, `stop_reason`, `usage`) is reshaped
+into a Messages response. For streaming, the CLI emits the raw Anthropic stream
+events, which are forwarded verbatim as Server-Sent Events.
 
 ## Limitations
 
