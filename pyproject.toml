@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "breakthrough"
+version = "0.1.0"
+description = "High-signal founder-to-VC outreach, generated through your own local Claude Code CLI. No API key."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Breakthrough" }]
+keywords = ["claude", "fundraising", "vc", "outreach", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+# No runtime dependencies. Generation runs through the local `claude` CLI,
+# using the login the user already has. Nothing to install, no API key.
+dependencies = []
+
+[project.scripts]
+breakthrough = "breakthrough.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/blacklord100/breakthrough"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/breakthrough"]
