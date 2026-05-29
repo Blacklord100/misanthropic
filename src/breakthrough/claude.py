@@ -29,14 +29,19 @@ class ClaudeError(RuntimeError):
     """A user-facing failure from the local Claude run."""
 
 
-def _base_args(model, system):
+def _base_args(model, system, resume=None, persist=False):
     args = [
         CLAUDE_BIN,
         "-p",
         "--max-turns", "1",
-        "--no-session-persistence",
         "--disallowedTools", DISALLOWED_TOOLS,
     ]
+    # Persist (and resume) when a request is linked to a key-session; otherwise
+    # stay ephemeral so the proxy doesn't flood session history.
+    if not persist:
+        args += ["--no-session-persistence"]
+    if resume:
+        args += ["--resume", resume]
     if system:
         args += ["--system-prompt", system]
     if model:
@@ -44,13 +49,15 @@ def _base_args(model, system):
     return args
 
 
-def run_blocking(prompt, model=None, system=None, timeout=None):
+def run_blocking(prompt, model=None, system=None, timeout=None,
+                 resume=None, persist=False, cwd=None):
     """Invoke `claude -p --output-format json` and return the parsed wrapper dict.
 
-    The wrapper carries `result` (the text), `stop_reason`, and `usage`. Prompt
-    goes in via stdin (no shell, no injection). Raises ClaudeError on failure.
+    The wrapper carries `result` (the text), `stop_reason`, `usage`, and
+    `session_id`. Prompt goes in via stdin (no shell, no injection). When
+    `resume` is set, the run continues that session. Raises ClaudeError on failure.
     """
-    args = _base_args(model or DEFAULT_MODEL, system) + ["--output-format", "json"]
+    args = _base_args(model or DEFAULT_MODEL, system, resume=resume, persist=persist) + ["--output-format", "json"]
     try:
         proc = subprocess.run(
             args,
@@ -58,6 +65,7 @@ def run_blocking(prompt, model=None, system=None, timeout=None):
             capture_output=True,
             text=True,
             timeout=timeout if timeout is not None else GEN_TIMEOUT_S,
+            cwd=cwd,
         )
     except FileNotFoundError:
         raise ClaudeError(
@@ -82,7 +90,7 @@ def run_blocking(prompt, model=None, system=None, timeout=None):
     return wrapper
 
 
-def stream_events(prompt, model=None, system=None):
+def stream_events(prompt, model=None, system=None, resume=None, persist=False, cwd=None):
     """Invoke `claude -p --output-format stream-json` and yield events.
 
     The CLI wraps each Anthropic streaming event in a {"type":"stream_event",
@@ -90,10 +98,11 @@ def stream_events(prompt, model=None, system=None):
     server can forward it as SSE with no schema translation.
 
     Yields (kind, obj) tuples where kind is:
-      "event"  -> obj is a raw Anthropic stream event (message_start, etc.)
-      "error"  -> obj is {"message": str}
+      "session" -> obj is the session id (str), emitted once near the start
+      "event"   -> obj is a raw Anthropic stream event (message_start, etc.)
+      "error"   -> obj is {"message": str}
     """
-    args = _base_args(model or DEFAULT_MODEL, system) + [
+    args = _base_args(model or DEFAULT_MODEL, system, resume=resume, persist=persist) + [
         "--output-format", "stream-json",
         "--include-partial-messages",
         "--verbose",
@@ -106,6 +115,7 @@ def stream_events(prompt, model=None, system=None):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            cwd=cwd,
         )
     except FileNotFoundError:
         raise ClaudeError(
@@ -124,7 +134,10 @@ def stream_events(prompt, model=None, system=None):
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if obj.get("type") == "stream_event":
+        otype = obj.get("type")
+        if otype == "system" and obj.get("subtype") == "init" and obj.get("session_id"):
+            yield ("session", obj["session_id"])
+        elif otype == "stream_event":
             event = obj.get("event")
             if isinstance(event, dict):
                 yield ("event", event)

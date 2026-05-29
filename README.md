@@ -86,6 +86,60 @@ sequence (`message_start`, `content_block_delta`, …, `message_stop`).
 breakthrough chat "Write a haiku about terminals"
 ```
 
+## Key-linked sessions (stateful conversations)
+
+By default the server is **stateless** — like the hosted API, each request is
+self-contained and ephemeral. But you can make an **API key double as a
+conversation handle**: every request under that key flows into one persistent
+`claude` session that's visible and resumable in the Claude Code CLI / desktop app.
+
+Turn it on by approving one or more keys:
+
+```bash
+breakthrough keys add eat-chocolate     # approve a key (= a session)
+breakthrough keys list
+breakthrough serve                       # now runs in "session mode"
+```
+
+Once any key is approved, the server switches to **session mode**:
+
+- Only approved keys are accepted (others get `401`). The key both authorizes
+  *and* names the conversation.
+- The first request under a key starts a persistent session; later requests
+  `--resume` it, so the whole chat accumulates in one session.
+- **Send only the new turn** each request — the session holds the prior history
+  (you don't resend the whole `messages` array):
+
+```bash
+# turn 1
+curl http://127.0.0.1:8787/v1/messages -H "x-api-key: eat-chocolate" \
+  -H "content-type: application/json" \
+  -d '{"model":"sonnet","max_tokens":256,"messages":[{"role":"user","content":"My name is Sam."}]}'
+
+# turn 2 — no history, the session remembers
+curl http://127.0.0.1:8787/v1/messages -H "x-api-key: eat-chocolate" \
+  -H "content-type: application/json" \
+  -d '{"model":"sonnet","max_tokens":256,"messages":[{"role":"user","content":"What is my name?"}]}'
+# -> "Sam"
+```
+
+Inspect or reset the links:
+
+```bash
+breakthrough sessions list             # key -> session id, turn count
+breakthrough sessions forget eat-chocolate   # next request starts a fresh session
+```
+
+State lives under `~/.breakthrough/` (override with `BREAKTHROUGH_HOME`):
+`keys.json`, `sessions.json`, and a `workspace/` directory used as a stable
+working dir so `--resume` (which is project-scoped) resolves. The sessions show
+up in the Claude Code CLI/app under that workspace project.
+
+Notes & limits: conversations are **append-only** — if a client rewrites earlier
+turns, the server starts a fresh session rather than corrupt the old one.
+Concurrent requests sharing a key are serialized. Approve keys via the CLI or the
+`BREAKTHROUGH_KEYS="key1,key2"` env var.
+
 ## Endpoints
 
 | Method | Path                        | Notes                                        |
@@ -104,8 +158,12 @@ Environment variables:
   Defaults to `sonnet`.
 - `CLAUDE_BIN` — full path to the `claude` binary if it's not on PATH.
 - `GEN_TIMEOUT_MS` — per-request generation timeout in ms. Defaults `120000`.
-- `BREAKTHROUGH_API_KEY` — if set, clients must send a matching `x-api-key`
-  (or `Authorization: Bearer`). If unset, the server is open.
+- `BREAKTHROUGH_API_KEY` — stateless-mode gate: if set (and no approved keys
+  exist), clients must send a matching `x-api-key`. Ignored in session mode.
+- `BREAKTHROUGH_KEYS` — comma-separated approved keys; enables session mode
+  (same as `breakthrough keys add`).
+- `BREAKTHROUGH_HOME` — where keys/sessions/workspace state lives. Defaults to
+  `~/.breakthrough`.
 
 ## How it works
 
