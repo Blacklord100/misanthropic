@@ -10,6 +10,7 @@ dist/
 .venv/
 venv/
 env/
+.build-venv/
 
 # tooling
 .pytest_cache/
