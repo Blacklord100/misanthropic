@@ -5,6 +5,7 @@ The hosted Messages API takes a `system` string plus a `messages` array; the
 flatten a request into that shape and build a spec-shaped response back.
 """
 
+import base64
 import json
 
 
@@ -106,3 +107,193 @@ def count_tokens(body):
         if isinstance(m, dict):
             text += "\n" + _content_to_text(m.get("content"))
     return {"input_tokens": max(1, len(text) // 4)}
+
+
+# ---- web search: CLI tool blocks -> API `web_search` content shape ----------
+#
+# The hosted Messages API represents a web search as structured content blocks:
+# a `server_tool_use` (name "web_search"), a `web_search_tool_result` carrying
+# `web_search_result` items, and `text` blocks. The local CLI instead emits its
+# own `WebSearch` tool_use plus a tool_result *string* ("Links: [{title,url}]").
+# These helpers remap CLI blocks to the API shape so clients see the real thing.
+#
+# Caveats (documented, unavoidable from CLI output):
+#   * `encrypted_content` / `encrypted_index` are opaque API-internal tokens the
+#     CLI never exposes. We synthesize a deterministic placeholder so the field
+#     is well-typed; it is NOT reusable against the hosted API.
+#   * `page_age` is unknown from the CLI -> null.
+#   * The CLI's final text has no structured citations to reconstruct -> the
+#     text block's `citations` is null.
+
+def _remap_tool_id(tid):
+    """CLI tool ids are `toolu_...`; the API's server tool uses `srvtoolu_...`."""
+    if isinstance(tid, str) and tid.startswith("toolu_"):
+        return "srvtoolu_" + tid[len("toolu_"):]
+    return tid or "srvtoolu_unknown"
+
+
+def _synth_encrypted(url, title):
+    raw = json.dumps({"u": url, "t": title}, separators=(",", ":")).encode()
+    return base64.b64encode(raw).decode()
+
+
+def _parse_search_links(text):
+    """Pull the `Links: [{title,url}, ...]` JSON array out of a WebSearch result.
+
+    The CLI's tool_result string is: a header line, `Links: [...]`, then snippet
+    prose and a REMINDER. Only the array is structured, so raw_decode it and
+    ignore the trailing prose.
+    """
+    if not isinstance(text, str):
+        return []
+    idx = text.find("Links:")
+    start = text.find("[", idx) if idx != -1 else -1
+    if start == -1:
+        return []
+    try:
+        data, _ = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError:
+        return []
+    results = []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("url"):
+                url, title = item.get("url"), item.get("title", "")
+                results.append({
+                    "type": "web_search_result",
+                    "url": url,
+                    "title": title,
+                    "encrypted_content": _synth_encrypted(url, title),
+                    "page_age": None,
+                })
+    return results
+
+
+def web_blocks_to_content(blocks):
+    """Turn the CLI's ordered tool blocks into an API `content` array.
+
+    Only WebSearch tool_use/tool_result pairs are mapped; a tool_result is
+    emitted as `web_search_tool_result` only when it matches a WebSearch
+    tool_use we already saw (the CLI always emits the call before its result),
+    so a stray result from any other tool can't produce an orphaned block."""
+    content = []
+    web_ids = set()
+    for b in blocks:
+        bt = b.get("type")
+        if bt == "text":
+            txt = b.get("text", "")
+            if txt:
+                content.append({"type": "text", "text": txt, "citations": None})
+        elif bt == "tool_use" and b.get("name") == "WebSearch":
+            web_ids.add(b.get("id"))
+            content.append({
+                "type": "server_tool_use",
+                "id": _remap_tool_id(b.get("id")),
+                "name": "web_search",
+                "input": b.get("input") or {},
+            })
+        elif bt == "tool_result" and b.get("tool_use_id") in web_ids:
+            content.append({
+                "type": "web_search_tool_result",
+                "tool_use_id": _remap_tool_id(b.get("tool_use_id")),
+                "content": _parse_search_links(b.get("content")),
+            })
+    if not content:
+        content = [{"type": "text", "text": "", "citations": None}]
+    return content
+
+
+def web_usage(wrapper):
+    """Build API usage. The CLI's top-level usage reflects only the final turn;
+    `modelUsage` carries per-model totals across the whole loop (incl. the haiku
+    sub-model that actually runs searches), so sum those for representative
+    totals and the `web_search_requests` count."""
+    usage = wrapper.get("usage") or {}
+    model_usage = wrapper.get("modelUsage") or {}
+    in_tok = out_tok = cache_read = cache_create = web_reqs = 0
+    if model_usage:
+        for mu in model_usage.values():
+            if not isinstance(mu, dict):
+                continue
+            in_tok += mu.get("inputTokens", 0) or 0
+            out_tok += mu.get("outputTokens", 0) or 0
+            cache_read += mu.get("cacheReadInputTokens", 0) or 0
+            cache_create += mu.get("cacheCreationInputTokens", 0) or 0
+            web_reqs += mu.get("webSearchRequests", 0) or 0
+    else:
+        in_tok = usage.get("input_tokens", 0) or 0
+        out_tok = usage.get("output_tokens", 0) or 0
+        cache_read = usage.get("cache_read_input_tokens", 0) or 0
+        cache_create = usage.get("cache_creation_input_tokens", 0) or 0
+    if not web_reqs:
+        web_reqs = (usage.get("server_tool_use") or {}).get("web_search_requests", 0) or 0
+    return {
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "cache_creation_input_tokens": cache_create,
+        "cache_read_input_tokens": cache_read,
+        "server_tool_use": {"web_search_requests": web_reqs},
+    }
+
+
+def web_message(blocks, wrapper, model_requested):
+    """Assemble a non-streaming Messages response from a web-enabled run."""
+    return {
+        "id": _message_id(wrapper),
+        "type": "message",
+        "role": "assistant",
+        "model": model_requested,
+        "content": web_blocks_to_content(blocks),
+        "stop_reason": wrapper.get("stop_reason") or "end_turn",
+        "stop_sequence": None,
+        "usage": web_usage(wrapper),
+    }
+
+
+def web_sse_events(content, usage, stop_reason, model_requested, message_id):
+    """Yield (event_type, data) pairs reproducing the API's web_search SSE order.
+
+    The CLI's agentic loop is several separate messages; the hosted API folds a
+    web search into ONE message with interleaved blocks. We can't faithfully do
+    that incrementally, so we buffer the run (see claude.run_web) and replay a
+    well-formed single-message stream: message_start, then per-block
+    start/delta/stop, then message_delta/message_stop. Shape is exact; only the
+    token-by-token timing is lost for web responses."""
+    start_usage = dict(usage)
+    start_usage["output_tokens"] = 0
+    yield ("message_start", {
+        "type": "message_start",
+        "message": {
+            "id": message_id,
+            "type": "message",
+            "role": "assistant",
+            "model": model_requested,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": start_usage,
+        },
+    })
+    for i, block in enumerate(content):
+        bt = block.get("type")
+        if bt == "text":
+            yield ("content_block_start", {"type": "content_block_start", "index": i,
+                                           "content_block": {"type": "text", "text": "", "citations": None}})
+            yield ("content_block_delta", {"type": "content_block_delta", "index": i,
+                                           "delta": {"type": "text_delta", "text": block.get("text", "")}})
+        elif bt == "server_tool_use":
+            yield ("content_block_start", {"type": "content_block_start", "index": i,
+                                           "content_block": {"type": "server_tool_use", "id": block.get("id"),
+                                                             "name": "web_search", "input": {}}})
+            yield ("content_block_delta", {"type": "content_block_delta", "index": i,
+                                           "delta": {"type": "input_json_delta",
+                                                     "partial_json": json.dumps(block.get("input") or {})}})
+        elif bt == "web_search_tool_result":
+            yield ("content_block_start", {"type": "content_block_start", "index": i, "content_block": block})
+        yield ("content_block_stop", {"type": "content_block_stop", "index": i})
+    yield ("message_delta", {
+        "type": "message_delta",
+        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+        "usage": {"output_tokens": usage.get("output_tokens", 0)},
+    })
+    yield ("message_stop", {"type": "message_stop"})

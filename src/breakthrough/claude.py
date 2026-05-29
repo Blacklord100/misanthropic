@@ -22,6 +22,16 @@ import subprocess
 # internal memory Read). Removing tools makes it a clean completion endpoint.
 NO_TOOLS = ""
 
+# Opt-in web access. OFF by default so the proxy stays a faithful bare-Messages
+# endpoint (the hosted API also has no internet unless you pass the web_search
+# server tool). When on, we expose only WebSearch — a clean 1:1 analog to the
+# API's `web_search` tool — and raise the turn cap so the agentic loop (search,
+# then answer) can complete instead of aborting at `--max-turns 1`. `WebSearch`
+# must also be in --allowedTools, else it is permission-denied in print mode.
+WEB_ENABLED = os.environ.get("BREAKTHROUGH_WEB", "").strip().lower() in ("1", "true", "yes", "on")
+WEB_TOOLS = "WebSearch"
+WEB_MAX_TURNS = os.environ.get("BREAKTHROUGH_WEB_MAX_TURNS", "16")
+
 # Claude Code's default `-p` system prompt is the full agentic prompt (memory,
 # tools, the user's env/identity). We always override it so the proxy behaves
 # like the bare Messages API; this neutral default is used when the client sends
@@ -37,14 +47,23 @@ class ClaudeError(RuntimeError):
     """A user-facing failure from the local Claude run."""
 
 
-def _base_args(model, system, resume=None, persist=False):
+def _base_args(model, system, resume=None, persist=False, web=False):
     args = [
         CLAUDE_BIN,
         "-p",
-        "--max-turns", "1",
-        "--tools", NO_TOOLS,
         "--system-prompt", system if system else DEFAULT_SYSTEM,
     ]
+    if web:
+        args += [
+            "--max-turns", WEB_MAX_TURNS,
+            "--tools", WEB_TOOLS,
+            "--allowedTools", WEB_TOOLS,
+        ]
+    else:
+        args += [
+            "--max-turns", "1",
+            "--tools", NO_TOOLS,
+        ]
     # Persist (and resume) when a request is linked to a key-session; otherwise
     # stay ephemeral so the proxy doesn't flood session history.
     if not persist:
@@ -155,3 +174,81 @@ def stream_events(prompt, model=None, system=None, resume=None, persist=False, c
     if rc != 0:
         stderr = proc.stderr.read().strip() if proc.stderr else ""
         yield ("error", {"message": stderr or f"claude exited with code {rc}"})
+
+
+def run_web(prompt, model=None, system=None, resume=None, persist=False, cwd=None):
+    """Run a web-enabled completion and collect the agentic loop's tool blocks.
+
+    `--output-format json` collapses the whole run into one `result` string, so
+    it can't expose the WebSearch tool_use / tool_result blocks we need to
+    rebuild the API's `web_search` content shape. We therefore drive stream-json
+    even for the non-streaming case and accumulate, in order, every text /
+    tool_use / tool_result block the model produced across its turns.
+
+    Returns (blocks, wrapper, session_id):
+      blocks      -> ordered list of CLI content blocks (text, tool_use, tool_result)
+      wrapper     -> the final `result` object (usage, modelUsage, stop_reason)
+      session_id  -> the CLI session id (for key-linked sessions)
+    """
+    args = _base_args(model or DEFAULT_MODEL, system, resume=resume, persist=persist, web=True) + [
+        "--output-format", "stream-json",
+        "--verbose",
+    ]
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            cwd=cwd,
+        )
+    except FileNotFoundError:
+        raise ClaudeError(
+            "`claude` CLI not found on PATH. Install Claude Code, or set "
+            "CLAUDE_BIN to its full path."
+        )
+
+    proc.stdin.write(prompt)
+    proc.stdin.close()
+
+    blocks = []
+    wrapper = None
+    session_id = None
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        otype = obj.get("type")
+        if otype == "system" and obj.get("subtype") == "init" and obj.get("session_id"):
+            session_id = obj["session_id"]
+        elif otype == "assistant":
+            for b in (obj.get("message", {}).get("content") or []):
+                if isinstance(b, dict) and b.get("type") in ("text", "tool_use"):
+                    blocks.append(b)
+        elif otype == "user":
+            for b in (obj.get("message", {}).get("content") or []):
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    blocks.append(b)
+        elif otype == "result":
+            wrapper = obj
+            if obj.get("session_id"):
+                session_id = obj["session_id"]
+
+    rc = proc.wait()
+    if rc != 0:
+        stderr = proc.stderr.read().strip() if proc.stderr else ""
+        detail = stderr or (wrapper.get("result") if isinstance(wrapper, dict) else "") or f"claude exited with code {rc}"
+        raise ClaudeError(detail)
+    if wrapper is None:
+        raise ClaudeError("Claude CLI produced no result.")
+    if wrapper.get("is_error"):
+        result = wrapper.get("result")
+        raise ClaudeError(result if isinstance(result, str) else "Local Claude returned an error.")
+
+    return blocks, wrapper, session_id
