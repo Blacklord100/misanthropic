@@ -36,6 +36,25 @@ PAGE = r"""<!doctype html>
   .empty { color:var(--dim); text-align:center; padding:40px; border:1px dashed var(--line); border-radius:12px; }
   .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--ok); color:#06270f; padding:8px 16px; border-radius:8px; font-weight:600; opacity:0; transition:opacity .2s; }
   .toast.show { opacity:1; }
+  /* recent activity */
+  .activity-head { display:flex; align-items:center; gap:10px; margin:36px 0 12px; }
+  .activity-head h2 { font-size:12px; margin:0; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+  .activity-head .grow { flex:1; }
+  .reqwrap { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  table.reqs { width:100%; border-collapse:collapse; font-size:12.5px; }
+  table.reqs th { text-align:left; color:var(--dim); font-weight:500; padding:8px 12px; border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  table.reqs td { padding:8px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  table.reqs tr:last-child td { border-bottom:0; }
+  table.reqs tr.preview td { padding:0 12px 10px 12px; border-bottom:1px solid var(--line); white-space:normal; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--dim); }
+  .pv-line { display:block; margin-top:4px; }
+  .pv-line.prompt { color:var(--acc); }
+  .pv-line.reply { color:var(--ok); }
+  .ok { color:var(--ok); }
+  .err { color:#ff6b6b; }
+  .badge-mode { background:#0b0e14; border:1px solid var(--line); border-radius:4px; padding:1px 7px; font-size:11px; color:var(--dim); }
+  .badge-mode.web, .badge-mode.session-web { color:var(--acc); border-color:#2a3a73; }
+  .badge-mode.session, .badge-mode.session-web { font-weight:600; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 </style>
 </head>
 <body>
@@ -50,6 +69,12 @@ PAGE = r"""<!doctype html>
     <button id="create">+ New key</button>
   </div>
   <div id="keys"></div>
+  <div class="activity-head">
+    <h2>Recent activity</h2>
+    <div class="grow"></div>
+    <button class="ghost" id="pv-toggle">Show previews</button>
+  </div>
+  <div id="requests" class="reqwrap"></div>
 </main>
 <div class="toast" id="toast"></div>
 <script>
@@ -93,6 +118,53 @@ async function del(key){
   await load();
 }
 load();
+
+// --- recent activity --------------------------------------------------
+let showPreviews = false;
+let lastReqs = [];
+function esc(s){ return String(s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmtTime(ts){ const d=new Date(ts*1000); return d.toLocaleTimeString([], {hour12:false}); }
+function renderRequests(reqs){
+  lastReqs = reqs;
+  const wrap = $("#requests");
+  if(!reqs.length){ wrap.innerHTML = `<div class="empty" style="border:0;margin:0">No requests yet. Run a curl or SDK call against the proxy and watch it appear here.</div>`; return; }
+  const rows = reqs.map(r => {
+    const status = r.status===200 ? `<span class="ok">${r.status}</span>` : `<span class="err">${esc(r.status||"err")}</span>`;
+    const tokens = (r.input_tokens!=null||r.output_tokens!=null) ? `<span class="mono">${r.input_tokens||0}→${r.output_tokens||0}</span>` : `<span class="mono" style="color:var(--dim)">—</span>`;
+    const dur = r.duration_ms!=null ? `<span class="mono">${r.duration_ms} ms</span>` : "";
+    const modeClass = (r.mode||"").replace("+","-");
+    const mode = `<span class="badge-mode ${modeClass}">${esc(r.mode||"")}${r.stream?" · stream":""}</span>`;
+    let pv = "";
+    if(showPreviews){
+      const prompt = r.prompt_preview ? `<span class="pv-line prompt">› ${esc(r.prompt_preview)}${r.prompt_preview.length>=80?"…":""}</span>` : "";
+      const reply = r.response_preview ? `<span class="pv-line reply">‹ ${esc(r.response_preview)}${r.response_preview.length>=80?"…":""}</span>` : (r.error ? `<span class="pv-line err">‹ ${esc(r.error)}</span>` : "");
+      if(prompt || reply) pv = `<tr class="preview"><td colspan="7">${prompt}${reply}</td></tr>`;
+    }
+    return `<tr>
+      <td class="mono">${fmtTime(r.ts)}</td>
+      <td>${esc(r.key_label||"")}</td>
+      <td class="mono">${esc(r.model||"")}</td>
+      <td>${mode}</td>
+      <td>${tokens}</td>
+      <td>${dur}</td>
+      <td>${status}</td>
+    </tr>${pv}`;
+  }).join("");
+  wrap.innerHTML = `<table class="reqs"><thead><tr><th>time</th><th>key</th><th>model</th><th>mode</th><th>tokens</th><th>dur</th><th>status</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function pollRequests(){
+  try{
+    const r = await (await fetch(base+"/admin/requests")).json();
+    renderRequests(r.requests || []);
+  } catch(e){}
+}
+$("#pv-toggle").onclick = () => {
+  showPreviews = !showPreviews;
+  $("#pv-toggle").textContent = showPreviews ? "Hide previews" : "Show previews";
+  renderRequests(lastReqs);
+};
+pollRequests();
+setInterval(pollRequests, 2000);
 </script>
 </body>
 </html>"""
