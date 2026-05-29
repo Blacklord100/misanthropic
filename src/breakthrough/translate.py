@@ -232,7 +232,7 @@ def web_usage(wrapper):
         "output_tokens": out_tok,
         "cache_creation_input_tokens": cache_create,
         "cache_read_input_tokens": cache_read,
-        "server_tool_use": {"web_search_requests": web_reqs},
+        "server_tool_use": {"web_search_requests": web_reqs, "web_fetch_requests": 0},
     }
 
 
