@@ -5,4 +5,4 @@ like the hosted Messages API — except every request is fulfilled by shelling o
 to the `claude` binary you already have logged in. No API key, no per-token billing.
 """
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
