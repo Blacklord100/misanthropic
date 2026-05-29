@@ -14,6 +14,7 @@ Two modes:
 import json
 import os
 import subprocess
+import threading
 
 # `--tools ""` REMOVES every tool from the model's available set, so it can only
 # produce text. This matters: `--disallowedTools` merely *denies* a tool, but the
@@ -33,7 +34,23 @@ NO_TOOLS = ""
 # at runtime; BREAKTHROUGH_WEB only sets the initial value. The server reads it
 # per request via web_enabled(), so a flip takes effect on the next request.
 WEB_TOOLS = "WebSearch"
-WEB_MAX_TURNS = os.environ.get("BREAKTHROUGH_WEB_MAX_TURNS", "16")
+
+
+def _positive_int_env(name, default):
+    """Read an env var as a positive int, falling back to default on garbage."""
+    try:
+        v = int(os.environ.get(name, str(default)))
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+WEB_MAX_TURNS = str(_positive_int_env("BREAKTHROUGH_WEB_MAX_TURNS", 16))
+# The agentic web loop legitimately takes longer than GEN_TIMEOUT_S (~120s):
+# multiple search turns + the final answer can run ~1-2 min in normal use, so
+# default to 10 min and let it be overridden. The watchdog kills the process if
+# it overruns instead of letting the request hang forever.
+WEB_TIMEOUT_S = float(os.environ.get("BREAKTHROUGH_WEB_TIMEOUT_MS", "600000")) / 1000.0
 
 _web_enabled = os.environ.get("BREAKTHROUGH_WEB", "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -60,6 +77,71 @@ GEN_TIMEOUT_S = float(os.environ.get("GEN_TIMEOUT_MS", "120000")) / 1000.0
 
 class ClaudeError(RuntimeError):
     """A user-facing failure from the local Claude run."""
+
+
+def _spawn_claude(args, prompt, cwd):
+    """Popen claude, drain stderr concurrently, write the prompt to stdin.
+
+    `--verbose` is talkative; if we left stderr buffered until after the run, the
+    ~64 KB OS pipe would fill on long agentic loops and claude would deadlock
+    writing into it. The drain thread keeps the pipe empty and stashes lines for
+    error messages. stdin is written with BrokenPipe tolerance so a claude that
+    rejects flags and exits early doesn't take us down — its stdout/stderr will
+    still explain why. Returns (proc, stderr_lines)."""
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            cwd=cwd,
+        )
+    except FileNotFoundError:
+        raise ClaudeError(
+            "`claude` CLI not found on PATH. Install Claude Code, or set "
+            "CLAUDE_BIN to its full path."
+        )
+    stderr_lines = []
+
+    def _drain():
+        try:
+            for line in proc.stderr:
+                stderr_lines.append(line)
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain, daemon=True).start()
+    try:
+        proc.stdin.write(prompt)
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        try:
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+    return proc, stderr_lines
+
+
+def _kill_watchdog(proc, timeout_s):
+    """Start a background timer that kills `proc` after `timeout_s` if it's
+    still running. Returns (timer, fired) — call timer.cancel() on normal exit;
+    if fired[0] is True afterwards, the process was killed by us."""
+    fired = [False]
+
+    def _fire():
+        fired[0] = True
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    timer = threading.Timer(timeout_s, _fire)
+    timer.daemon = True
+    timer.start()
+    return timer, fired
 
 
 def _base_args(model, system, resume=None, persist=False, web=False):
@@ -150,44 +232,33 @@ def stream_events(prompt, model=None, system=None, resume=None, persist=False, c
         "--include-partial-messages",
         "--verbose",
     ]
+    proc, stderr_lines = _spawn_claude(args, prompt, cwd)
+    timer, timed_out = _kill_watchdog(proc, GEN_TIMEOUT_S)
     try:
-        proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            cwd=cwd,
-        )
-    except FileNotFoundError:
-        raise ClaudeError(
-            "`claude` CLI not found on PATH. Install Claude Code, or set "
-            "CLAUDE_BIN to its full path."
-        )
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            otype = obj.get("type")
+            if otype == "system" and obj.get("subtype") == "init" and obj.get("session_id"):
+                yield ("session", obj["session_id"])
+            elif otype == "stream_event":
+                event = obj.get("event")
+                if isinstance(event, dict):
+                    yield ("event", event)
 
-    proc.stdin.write(prompt)
-    proc.stdin.close()
+        rc = proc.wait()
+    finally:
+        timer.cancel()
 
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        otype = obj.get("type")
-        if otype == "system" and obj.get("subtype") == "init" and obj.get("session_id"):
-            yield ("session", obj["session_id"])
-        elif otype == "stream_event":
-            event = obj.get("event")
-            if isinstance(event, dict):
-                yield ("event", event)
-
-    rc = proc.wait()
-    if rc != 0:
-        stderr = proc.stderr.read().strip() if proc.stderr else ""
+    if timed_out[0]:
+        yield ("error", {"message": f"Local Claude timed out after {GEN_TIMEOUT_S:.0f}s."})
+    elif rc != 0:
+        stderr = "".join(stderr_lines).strip()
         yield ("error", {"message": stderr or f"claude exited with code {rc}"})
 
 
@@ -209,55 +280,45 @@ def run_web(prompt, model=None, system=None, resume=None, persist=False, cwd=Non
         "--output-format", "stream-json",
         "--verbose",
     ]
-    try:
-        proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            cwd=cwd,
-        )
-    except FileNotFoundError:
-        raise ClaudeError(
-            "`claude` CLI not found on PATH. Install Claude Code, or set "
-            "CLAUDE_BIN to its full path."
-        )
-
-    proc.stdin.write(prompt)
-    proc.stdin.close()
+    proc, stderr_lines = _spawn_claude(args, prompt, cwd)
+    timer, timed_out = _kill_watchdog(proc, WEB_TIMEOUT_S)
 
     blocks = []
     wrapper = None
     session_id = None
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        otype = obj.get("type")
-        if otype == "system" and obj.get("subtype") == "init" and obj.get("session_id"):
-            session_id = obj["session_id"]
-        elif otype == "assistant":
-            for b in (obj.get("message", {}).get("content") or []):
-                if isinstance(b, dict) and b.get("type") in ("text", "tool_use"):
-                    blocks.append(b)
-        elif otype == "user":
-            for b in (obj.get("message", {}).get("content") or []):
-                if isinstance(b, dict) and b.get("type") == "tool_result":
-                    blocks.append(b)
-        elif otype == "result":
-            wrapper = obj
-            if obj.get("session_id"):
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            otype = obj.get("type")
+            if otype == "system" and obj.get("subtype") == "init" and obj.get("session_id"):
                 session_id = obj["session_id"]
+            elif otype == "assistant":
+                for b in (obj.get("message", {}).get("content") or []):
+                    if isinstance(b, dict) and b.get("type") in ("text", "tool_use"):
+                        blocks.append(b)
+            elif otype == "user":
+                for b in (obj.get("message", {}).get("content") or []):
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        blocks.append(b)
+            elif otype == "result":
+                wrapper = obj
+                if obj.get("session_id"):
+                    session_id = obj["session_id"]
 
-    rc = proc.wait()
+        rc = proc.wait()
+    finally:
+        timer.cancel()
+
+    if timed_out[0]:
+        raise ClaudeError(f"Local Claude timed out after {WEB_TIMEOUT_S:.0f}s during web search.")
     if rc != 0:
-        stderr = proc.stderr.read().strip() if proc.stderr else ""
+        stderr = "".join(stderr_lines).strip()
         detail = stderr or (wrapper.get("result") if isinstance(wrapper, dict) else "") or f"claude exited with code {rc}"
         raise ClaudeError(detail)
     if wrapper is None:

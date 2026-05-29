@@ -259,6 +259,13 @@ class Handler(BaseHTTPRequestHandler):
                 sse(event_type, data)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client hung up mid-stream
+        except Exception as e:
+            # Translation bug post-headers: surface it as an SSE error instead
+            # of silently truncating the stream after 200 has shipped.
+            try:
+                sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
+            except Exception:
+                pass
 
     def _blocking_session(self, prompt, model, system, key):
         """Run linked to the key's session: resume it, persist, serialize."""
@@ -326,6 +333,13 @@ class Handler(BaseHTTPRequestHandler):
             sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
         except (BrokenPipeError, ConnectionResetError):
             pass  # client hung up mid-stream
+        except Exception as e:
+            # A bug here (e.g. a malformed event from the CLI) would otherwise
+            # truncate the stream silently after the 200/headers have shipped.
+            try:
+                sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
+            except Exception:
+                pass
         finally:
             if lock:
                 lock.release()

@@ -185,10 +185,13 @@ def web_blocks_to_content(blocks):
             if txt:
                 content.append({"type": "text", "text": txt, "citations": None})
         elif bt == "tool_use" and b.get("name") == "WebSearch":
-            web_ids.add(b.get("id"))
+            tid = b.get("id")
+            if not tid:
+                continue  # skip rather than coerce to a colliding placeholder id
+            web_ids.add(tid)
             content.append({
                 "type": "server_tool_use",
-                "id": _remap_tool_id(b.get("id")),
+                "id": _remap_tool_id(tid),
                 "name": "web_search",
                 "input": b.get("input") or {},
             })

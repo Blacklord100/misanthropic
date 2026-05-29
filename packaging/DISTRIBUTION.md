@@ -44,10 +44,23 @@ xcrun notarytool submit Breakthrough.zip \
 xcrun stapler staple dist/Breakthrough.app
 ```
 
-Then distribute the `.app` (or wrap it in a `.dmg`). Notarized apps open with a
-normal double-click on any Mac.
+Then distribute the `.app` (or wrap it in a `.dmg` — see step 4). Notarized apps
+open with a normal double-click on any Mac.
 
-## 4. Python runtime note
+## 4. Wrap in a `.dmg` (recommended for sharing)
+
+```bash
+bash packaging/make_dmg.sh
+# -> dist/Breakthrough-<version>.dmg
+```
+
+This produces a compressed UDZO disk image named with the bundle's
+`CFBundleShortVersionString`. Recipients open it, drag `Breakthrough.app` to
+`/Applications`, and launch from there. The `.dmg` is just a shipping wrapper —
+the signing/notarization above applies to the `.app` *inside* it. For a fully
+clean launch experience on other Macs, do step 3 *before* building the `.dmg`.
+
+## 5. Python runtime note
 
 py2app bundles a Python interpreter and the `breakthrough` package into the
 `.app`, so recipients do **not** need Python installed. They do still need the
