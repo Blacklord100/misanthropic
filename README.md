@@ -96,7 +96,8 @@ bash packaging/build.sh        # -> dist/Breakthrough.app
 open dist/Breakthrough.app
 ```
 
-It lives in the menu bar (no Dock icon): start/stop the server, open the
+It lives in the menu bar (no Dock icon): start/stop the server, toggle
+**web search** on/off (takes effect on the next request — see below), open the
 dashboard, copy the base URL, and toggle "start at login". The dashboard
 (also at `http://127.0.0.1:8787/` whenever the server runs) lets you:
 

@@ -27,7 +27,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__, dashboard, sessions, translate
-from .claude import ClaudeError, DEFAULT_MODEL, WEB_ENABLED, run_blocking, run_web, stream_events
+from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, run_web, stream_events, web_enabled
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
 API_KEY = os.environ.get("BREAKTHROUGH_API_KEY")
@@ -173,7 +173,8 @@ class Handler(BaseHTTPRequestHandler):
 
         # Web mode runs the agentic loop and reshapes its tool blocks into the
         # API's `web_search` content. Both stream and non-stream go through it.
-        if WEB_ENABLED:
+        # Checked per request so the menu-bar app's toggle takes effect live.
+        if web_enabled():
             if body.get("stream"):
                 return self._stream_web(prompt, model, system, key if linked else None)
             return self._blocking_web(prompt, model, system, key if linked else None)
@@ -351,6 +352,7 @@ def serve(host="127.0.0.1", port=8787):
               f"sessions persist & resume per key", file=sys.stderr)
     else:
         print(f"  mode: stateless  ·  auth: {'x-api-key required' if API_KEY else 'open (local)'}", file=sys.stderr)
+    print(f"  web search: {'on (BREAKTHROUGH_WEB)' if web_enabled() else 'off — set BREAKTHROUGH_WEB=1'}", file=sys.stderr)
     print(f"  point your client at  base_url={base}", file=sys.stderr)
     try:
         httpd.serve_forever()
