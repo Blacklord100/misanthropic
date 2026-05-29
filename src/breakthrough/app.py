@@ -23,6 +23,7 @@ PORT = int(os.environ.get("PORT", "8787"))
 BASE_URL = f"http://{HOST}:{PORT}"
 
 LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.breakthrough.app.plist"
+ICON_PATH = Path(__file__).parent / "resources" / "menubar.png"
 
 
 def _claude_ready():
@@ -81,7 +82,16 @@ def main():
 
     class Breakthrough(rumps.App):
         def __init__(self):
-            super().__init__("◐ BT", quit_button=None)
+            # Icon-only menu bar: a skull silhouette with an Anthropic-style
+            # asterisk on the forehead. Loaded as a template image so macOS
+            # auto-tints it for light/dark. If the bundled asset is missing for
+            # any reason, fall back to the old text title.
+            if ICON_PATH.exists():
+                super().__init__("Breakthrough", title=None,
+                                 icon=str(ICON_PATH), template=True,
+                                 quit_button=None)
+            else:
+                super().__init__("◐ BT", quit_button=None)
             self.httpd = None
             self.thread = None
             self.toggle_item = rumps.MenuItem("Stop server", callback=self.toggle)
@@ -114,7 +124,6 @@ def main():
             self.httpd = server.make_httpd(HOST, PORT)
             self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
             self.thread.start()
-            self.title = "◐ BT"
             self.toggle_item.title = "Stop server"
 
         def stop_server(self):
@@ -124,7 +133,6 @@ def main():
             self.httpd.server_close()
             self.httpd = None
             self.thread = None
-            self.title = "○ BT"
             self.toggle_item.title = "Start server"
 
         def toggle(self, _):
