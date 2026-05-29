@@ -24,9 +24,10 @@ Stdlib only — no web framework. ThreadingHTTPServer handles concurrent clients
 import json
 import os
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, dashboard, sessions, translate
+from . import __version__, dashboard, request_log, sessions, translate
 from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, run_web, stream_events, web_enabled
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
@@ -55,9 +56,89 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+        # Finalize the request log if one is in flight (only set by
+        # /v1/messages; admin/health responses are no-ops here).
+        if getattr(self, "_log_rec", None) is not None:
+            if status == 200:
+                self._log_finalize(status, message_obj=obj if isinstance(obj, dict) else None)
+            else:
+                err = obj.get("error") if isinstance(obj, dict) else None
+                self._log_finalize(status, error_msg=(err or {}).get("message") if isinstance(err, dict) else None)
 
     def _send_error(self, status, etype, message):
         self._send_json(status, {"type": "error", "error": {"type": etype, "message": message}})
+
+    # ---- request log helpers (see request_log.py and the dashboard) -------
+
+    def _key_label(self, key):
+        if not key:
+            return "stateless"
+        meta = (sessions.keys_detail() or {}).get(key) or {}
+        return meta.get("label") or "(unnamed)"
+
+    def _request_mode(self, linked):
+        w = web_enabled()
+        if linked and w:
+            return "session+web"
+        if linked:
+            return "session"
+        if w:
+            return "web"
+        return "stateless"
+
+    def _last_user_preview(self, body):
+        """First 80 chars of the last user message's text — the most useful
+        thing to see in the activity log when debugging."""
+        msgs = body.get("messages")
+        if not isinstance(msgs, list) or not msgs:
+            return ""
+        last = msgs[-1]
+        if not isinstance(last, dict):
+            return ""
+        content = last.get("content")
+        if isinstance(content, str):
+            return content[:80]
+        if isinstance(content, list):
+            for blk in content:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    return (blk.get("text") or "")[:80]
+        return ""
+
+    def _log_start(self, body, key, linked):
+        self._log_rec = {
+            "ts": time.time(),
+            "key_label": self._key_label(key) if linked else "stateless",
+            "model": body.get("model") or DEFAULT_MODEL,
+            "mode": self._request_mode(linked),
+            "stream": bool(body.get("stream")),
+            "prompt_preview": self._last_user_preview(body),
+        }
+
+    def _log_finalize(self, status, message_obj=None, error_msg=None,
+                      in_tokens=None, out_tokens=None, response_preview=None):
+        rec = getattr(self, "_log_rec", None)
+        if rec is None:
+            return
+        rec["duration_ms"] = int((time.time() - rec["ts"]) * 1000)
+        rec["status"] = status
+        if isinstance(message_obj, dict) and message_obj.get("type") == "message":
+            usage = message_obj.get("usage") or {}
+            rec["input_tokens"] = usage.get("input_tokens", 0)
+            rec["output_tokens"] = usage.get("output_tokens", 0)
+            for blk in message_obj.get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    rec["response_preview"] = (blk.get("text") or "")[:80]
+                    break
+        if in_tokens is not None:
+            rec["input_tokens"] = in_tokens
+        if out_tokens is not None:
+            rec["output_tokens"] = out_tokens
+        if response_preview is not None:
+            rec["response_preview"] = response_preview[:80]
+        if error_msg:
+            rec["error"] = str(error_msg)[:200]
+        request_log.append(rec)
+        self._log_rec = None
 
     def _send_html(self, html):
         data = html.encode()
@@ -100,6 +181,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._is_local():
                 return self._send_error(403, "permission_error", "Admin API is local-only.")
             return self._send_json(200, self._admin_state())
+        if path == "/admin/requests":
+            if not self._is_local():
+                return self._send_error(403, "permission_error", "Admin API is local-only.")
+            return self._send_json(200, {"requests": request_log.recent()})
         self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
 
     def _admin_state(self):
@@ -170,6 +255,10 @@ class Handler(BaseHTTPRequestHandler):
         system = translate.extract_system(body)
         prompt = translate.messages_to_prompt(messages)
         linked = sessions.session_mode_enabled()  # key-linked session?
+
+        # Start a request-log entry; finalized in _send_json or the streaming
+        # paths' end-of-emit hooks. Visible at GET /admin/requests.
+        self._log_start(body, key, linked)
 
         # Web mode runs the agentic loop and reshapes its tool blocks into the
         # API's `web_search` content. Both stream and non-stream go through it.
@@ -254,9 +343,19 @@ class Handler(BaseHTTPRequestHandler):
         usage = translate.web_usage(wrapper)
         stop_reason = wrapper.get("stop_reason") or "end_turn"
         message_id = translate._message_id(wrapper)
+        # Pre-compute the activity-log preview from the first text block.
+        preview = ""
+        for blk in content:
+            if blk.get("type") == "text" and blk.get("text"):
+                preview = blk["text"][:80]
+                break
         try:
             for event_type, data in translate.web_sse_events(content, usage, stop_reason, model, message_id):
                 sse(event_type, data)
+            self._log_finalize(200,
+                               in_tokens=usage.get("input_tokens"),
+                               out_tokens=usage.get("output_tokens"),
+                               response_preview=preview)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client hung up mid-stream
         except Exception as e:
@@ -266,6 +365,7 @@ class Handler(BaseHTTPRequestHandler):
                 sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
             except Exception:
                 pass
+            self._log_finalize(500, error_msg=str(e))
 
     def _blocking_session(self, prompt, model, system, key):
         """Run linked to the key's session: resume it, persist, serialize."""
@@ -314,13 +414,22 @@ class Handler(BaseHTTPRequestHandler):
             resume_id = sessions.get_session_id(key) if key else None
             captured_sid = None
             saw_error = False
+            log_in = log_out = None
             for kind, obj in stream_events(prompt, model=model, system=system,
                                            resume=resume_id, persist=bool(key),
                                            cwd=str(sessions.WORKSPACE) if key else None):
                 if kind == "session":
                     captured_sid = obj
                 elif kind == "event":
-                    sse(obj.get("type", "message_delta"), obj)
+                    et = obj.get("type")
+                    if et == "message_start":
+                        u = ((obj.get("message") or {}).get("usage") or {})
+                        log_in = u.get("input_tokens", log_in)
+                    elif et == "message_delta":
+                        ot = (obj.get("usage") or {}).get("output_tokens")
+                        if ot is not None:
+                            log_out = ot
+                    sse(et or "message_delta", obj)
                 elif kind == "error":
                     saw_error = True
                     sse("error", {"type": "error", "error": {"type": "api_error", "message": obj.get("message", "")}})
@@ -329,8 +438,15 @@ class Handler(BaseHTTPRequestHandler):
                     sessions.forget_session(key)  # likely a stale session id
                 elif captured_sid:
                     sessions.record_session(key, captured_sid)
+            self._log_finalize(
+                500 if saw_error else 200,
+                in_tokens=log_in, out_tokens=log_out,
+                response_preview="[streamed]" if not saw_error else None,
+                error_msg="upstream stream error" if saw_error else None,
+            )
         except ClaudeError as e:
             sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
+            self._log_finalize(500, error_msg=str(e))
         except (BrokenPipeError, ConnectionResetError):
             pass  # client hung up mid-stream
         except Exception as e:
