@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "breakthrough"
-version = "0.1.0"
-description = "High-signal founder-to-VC outreach, generated through your own local Claude Code CLI. No API key."
+version = "0.2.0"
+description = "Anthropic-API-compatible server backed by your local Claude Code CLI. No API key."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Breakthrough" }]
-keywords = ["claude", "fundraising", "vc", "outreach", "cli"]
+keywords = ["claude", "anthropic", "api", "proxy", "claude-code", "cli", "messages-api"]
 classifiers = [
     "Environment :: Console",
     "Programming Language :: Python :: 3",
