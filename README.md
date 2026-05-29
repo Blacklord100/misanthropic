@@ -241,6 +241,13 @@ For non-streaming, the CLI's JSON (`result`, `stop_reason`, `usage`) is reshaped
 into a Messages response. For streaming, the CLI emits the raw Anthropic stream
 events, which are forwarded verbatim as Server-Sent Events.
 
+With `BREAKTHROUGH_WEB=1` the invocation changes to `--tools WebSearch
+--allowedTools WebSearch --max-turns 16` and always runs `stream-json` (even for
+non-streaming requests, since the plain JSON wrapper collapses the agentic loop
+into one string and hides the tool blocks). The CLI's `WebSearch`
+tool_use/tool_result events are then remapped into the API's `web_search`
+content blocks.
+
 ## Limitations
 
 It's a faithful proxy for text generation, not a 1:1 reimplementation of the
