@@ -128,6 +128,13 @@ function fmtTime(ts){ const d=new Date(ts*1000); return d.toLocaleTimeString([],
 function renderRequests(reqs){
   lastReqs = reqs;
   const wrap = $("#requests");
+  // Preserve the scroll position of any expanded row across the re-render,
+  // keyed by request ts — otherwise rebuilding the table snaps it back to top.
+  const scrolls = {};
+  wrap.querySelectorAll(".pv-body").forEach(el => { scrolls[el.dataset.ts] = el.scrollTop; });
+  const restore = () => wrap.querySelectorAll(".pv-body").forEach(el => {
+    const s = scrolls[el.dataset.ts]; if(s) el.scrollTop = s;
+  });
   if(!reqs.length){ wrap.innerHTML = `<div class="empty" style="border:0;margin:0">No requests yet. Run a curl or SDK call against the proxy and watch it appear here.</div>`; return; }
   const rows = reqs.map(r => {
     const status = r.status===200 ? `<span class="ok">${r.status}</span>` : `<span class="err">${esc(r.status||"err")}</span>`;
@@ -139,7 +146,7 @@ function renderRequests(reqs){
     if(showText){
       const prompt = r.prompt_text ? `<span class="pv-line prompt">› ${esc(r.prompt_text)}</span>` : "";
       const reply = r.response_text ? `<span class="pv-line reply">‹ ${esc(r.response_text)}</span>` : (r.error ? `<span class="pv-line err">‹ ${esc(r.error)}</span>` : "");
-      if(prompt || reply) pv = `<tr class="preview"><td colspan="7"><div class="pv-body">${prompt}${reply}</div></td></tr>`;
+      if(prompt || reply) pv = `<tr class="preview"><td colspan="7"><div class="pv-body" data-ts="${r.ts}">${prompt}${reply}</div></td></tr>`;
     }
     return `<tr>
       <td class="mono">${fmtTime(r.ts)}</td>
@@ -152,11 +159,20 @@ function renderRequests(reqs){
     </tr>${pv}`;
   }).join("");
   wrap.innerHTML = `<table class="reqs"><thead><tr><th>time</th><th>key</th><th>model</th><th>mode</th><th>tokens</th><th>dur</th><th>status</th></tr></thead><tbody>${rows}</tbody></table>`;
+  restore();
 }
+let lastSig = null;
 async function pollRequests(){
   try{
     const r = await (await fetch(base+"/admin/requests")).json();
-    renderRequests(r.requests || []);
+    const reqs = r.requests || [];
+    // Re-render only when the set of requests actually changed; otherwise an
+    // open row would lose its scroll position (and any text selection) on
+    // every poll. New records have a fresh ts, so length + newest ts is enough.
+    const sig = reqs.length + "|" + (reqs[0] ? reqs[0].ts : "");
+    if(sig === lastSig) return;
+    lastSig = sig;
+    renderRequests(reqs);
   } catch(e){}
 }
 $("#pv-toggle").onclick = () => {
