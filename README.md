@@ -263,9 +263,10 @@ hosted API:
 
 - **`max_tokens`, `temperature`, `top_p`, `stop_sequences`** are accepted but not
   enforced — the CLI doesn't expose those knobs in print mode.
-- **`tools` (function calling)** and **image inputs** aren't supported; image
-  blocks are dropped with a placeholder. (Web search is supported separately —
-  see above.)
+- **`tools` (function calling)** isn't supported. (Web search *is* — see above.)
+- **Image inputs are supported.** Send standard Anthropic `image` content blocks
+  (base64) and they're passed straight through to the model via the CLI's
+  stream-json input. Works in stateless, session, streaming, and web modes.
 - **`count_tokens`** is an estimate, not the exact server-side tokenizer.
 - Multi-turn history is flattened into one prompt (works well; not a stateful
   agent session).

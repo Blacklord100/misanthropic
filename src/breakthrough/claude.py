@@ -176,15 +176,74 @@ def _base_args(model, system, resume=None, persist=False, web=False):
     return args
 
 
+def _collect_blocking(args, payload, cwd, timeout_s):
+    """Drive a stream-json run and collapse it into a run_blocking-style wrapper.
+
+    `--output-format json` can't be combined with `--input-format stream-json`
+    (the only CLI path that takes image input), so for image requests we run the
+    stream-json *output* and rebuild the one-shot wrapper from it: the CLI's
+    terminal `result` event already carries `result`/`usage`/`stop_reason`/
+    `session_id` — the same shape `run_blocking` returns. Text blocks are
+    accumulated only as a fallback if that event lacks the joined result string.
+    """
+    proc, stderr_lines = _spawn_claude(args, payload, cwd)
+    timer, timed_out = _kill_watchdog(proc, timeout_s)
+    wrapper = None
+    text_parts = []
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            otype = obj.get("type")
+            if otype == "assistant":
+                for b in (obj.get("message", {}).get("content") or []):
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        text_parts.append(b.get("text", ""))
+            elif otype == "result":
+                wrapper = obj
+        rc = proc.wait()
+    finally:
+        timer.cancel()
+
+    if timed_out[0]:
+        raise ClaudeError("Local Claude timed out. Try again or a faster model.")
+    if rc != 0:
+        stderr = "".join(stderr_lines).strip()
+        detail = stderr or (wrapper.get("result") if isinstance(wrapper, dict) else "") or f"claude exited with code {rc}"
+        raise ClaudeError(detail)
+    if wrapper is None:
+        raise ClaudeError("Claude CLI produced no result.")
+    if wrapper.get("is_error"):
+        result = wrapper.get("result")
+        raise ClaudeError(result if isinstance(result, str) else "Local Claude returned an error.")
+    if not isinstance(wrapper.get("result"), str) or not wrapper.get("result"):
+        wrapper["result"] = "".join(text_parts)
+    return wrapper
+
+
 def run_blocking(prompt, model=None, system=None, timeout=None,
-                 resume=None, persist=False, cwd=None):
+                 resume=None, persist=False, cwd=None, input_format="text"):
     """Invoke `claude -p --output-format json` and return the parsed wrapper dict.
 
     The wrapper carries `result` (the text), `stop_reason`, `usage`, and
     `session_id`. Prompt goes in via stdin (no shell, no injection). When
     `resume` is set, the run continues that session. Raises ClaudeError on failure.
+
+    `input_format="stream-json"` feeds an Anthropic-shaped JSONL payload (used to
+    carry image content); that path drives stream-json output and collects, since
+    `--output-format json` is incompatible with `--input-format stream-json`.
     """
-    args = _base_args(model or DEFAULT_MODEL, system, resume=resume, persist=persist) + ["--output-format", "json"]
+    base = _base_args(model or DEFAULT_MODEL, system, resume=resume, persist=persist)
+    timeout_s = timeout if timeout is not None else GEN_TIMEOUT_S
+    if input_format == "stream-json":
+        args = base + ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+        return _collect_blocking(args, prompt, cwd, timeout_s)
+    args = base + ["--output-format", "json"]
     try:
         proc = subprocess.run(
             args,
@@ -225,7 +284,7 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
     return wrapper
 
 
-def stream_events(prompt, model=None, system=None, resume=None, persist=False, cwd=None):
+def stream_events(prompt, model=None, system=None, resume=None, persist=False, cwd=None, input_format="text"):
     """Invoke `claude -p --output-format stream-json` and yield events.
 
     The CLI wraps each Anthropic streaming event in a {"type":"stream_event",
@@ -236,12 +295,17 @@ def stream_events(prompt, model=None, system=None, resume=None, persist=False, c
       "session" -> obj is the session id (str), emitted once near the start
       "event"   -> obj is a raw Anthropic stream event (message_start, etc.)
       "error"   -> obj is {"message": str}
+
+    `input_format="stream-json"` reads an Anthropic-shaped JSONL payload from
+    stdin (carries image content) instead of a plain text prompt.
     """
     args = _base_args(model or DEFAULT_MODEL, system, resume=resume, persist=persist) + [
         "--output-format", "stream-json",
         "--include-partial-messages",
         "--verbose",
     ]
+    if input_format == "stream-json":
+        args += ["--input-format", "stream-json"]
     proc, stderr_lines = _spawn_claude(args, prompt, cwd)
     timer, timed_out = _kill_watchdog(proc, GEN_TIMEOUT_S)
     try:
@@ -272,7 +336,7 @@ def stream_events(prompt, model=None, system=None, resume=None, persist=False, c
         yield ("error", {"message": stderr or f"claude exited with code {rc}"})
 
 
-def run_web(prompt, model=None, system=None, resume=None, persist=False, cwd=None):
+def run_web(prompt, model=None, system=None, resume=None, persist=False, cwd=None, input_format="text"):
     """Run a web-enabled completion and collect the agentic loop's tool blocks.
 
     `--output-format json` collapses the whole run into one `result` string, so
@@ -290,6 +354,8 @@ def run_web(prompt, model=None, system=None, resume=None, persist=False, cwd=Non
         "--output-format", "stream-json",
         "--verbose",
     ]
+    if input_format == "stream-json":
+        args += ["--input-format", "stream-json"]
     proc, stderr_lines = _spawn_claude(args, prompt, cwd)
     timer, timed_out = _kill_watchdog(proc, WEB_TIMEOUT_S)
 

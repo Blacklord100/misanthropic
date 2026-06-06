@@ -253,7 +253,9 @@ class Handler(BaseHTTPRequestHandler):
 
         model = body.get("model") or DEFAULT_MODEL
         system = translate.extract_system(body)
-        prompt = translate.messages_to_prompt(messages)
+        # build_cli_input picks the wire format: plain text by default, or
+        # stream-json (Anthropic content blocks) when the request carries images.
+        input_format, prompt = translate.build_cli_input(messages)
         linked = sessions.session_mode_enabled()  # key-linked session?
 
         # Start a request-log entry; finalized in _send_json or the streaming
@@ -265,24 +267,24 @@ class Handler(BaseHTTPRequestHandler):
         # Checked per request so the menu-bar app's toggle takes effect live.
         if web_enabled():
             if body.get("stream"):
-                return self._stream_web(prompt, model, system, key if linked else None)
-            return self._blocking_web(prompt, model, system, key if linked else None)
+                return self._stream_web(prompt, model, system, key if linked else None, input_format)
+            return self._blocking_web(prompt, model, system, key if linked else None, input_format)
 
         if body.get("stream"):
-            return self._stream_messages(prompt, model, system, key if linked else None)
+            return self._stream_messages(prompt, model, system, key if linked else None, input_format)
 
         if linked:
-            return self._blocking_session(prompt, model, system, key)
+            return self._blocking_session(prompt, model, system, key, input_format)
 
         try:
-            wrapper = run_blocking(prompt, model=model, system=system)
+            wrapper = run_blocking(prompt, model=model, system=system, input_format=input_format)
         except ClaudeError as e:
             return self._send_error(500, "api_error", str(e))
         self._send_json(200, translate.wrapper_to_message(wrapper, model))
 
     # ---- web search (opt-in) ------------------------------------------------
 
-    def _run_web_linked(self, prompt, model, system, key):
+    def _run_web_linked(self, prompt, model, system, key, input_format="text"):
         """Drive a web-enabled run, handling key-session lock/resume/retry.
 
         `key` is None in stateless mode. Mirrors the stale-session recovery of
@@ -297,13 +299,15 @@ class Handler(BaseHTTPRequestHandler):
             resume_id = sessions.get_session_id(key) if linked else None
             try:
                 blocks, wrapper, sid = run_web(prompt, model=model, system=system,
-                                               resume=resume_id, persist=linked, cwd=cwd)
+                                               resume=resume_id, persist=linked, cwd=cwd,
+                                               input_format=input_format)
             except ClaudeError as e:
                 if not (linked and resume_id and _is_invalid_session_error(str(e))):
                     raise
                 sessions.forget_session(key)
                 blocks, wrapper, sid = run_web(prompt, model=model, system=system,
-                                               resume=None, persist=True, cwd=cwd)
+                                               resume=None, persist=True, cwd=cwd,
+                                               input_format=input_format)
             if linked and sid:
                 sessions.record_session(key, sid)
             return blocks, wrapper
@@ -311,19 +315,19 @@ class Handler(BaseHTTPRequestHandler):
             if lock:
                 lock.release()
 
-    def _blocking_web(self, prompt, model, system, key):
+    def _blocking_web(self, prompt, model, system, key, input_format="text"):
         try:
-            blocks, wrapper = self._run_web_linked(prompt, model, system, key)
+            blocks, wrapper = self._run_web_linked(prompt, model, system, key, input_format)
         except ClaudeError as e:
             return self._send_error(500, "api_error", str(e))
         self._send_json(200, translate.web_message(blocks, wrapper, model))
 
-    def _stream_web(self, prompt, model, system, key):
+    def _stream_web(self, prompt, model, system, key, input_format="text"):
         # The web run is buffered (the agentic loop can't be a single live
         # stream), so do the work first; a failure here can still be a clean
         # JSON error since no SSE headers have been sent yet.
         try:
-            blocks, wrapper = self._run_web_linked(prompt, model, system, key)
+            blocks, wrapper = self._run_web_linked(prompt, model, system, key, input_format)
         except ClaudeError as e:
             return self._send_error(500, "api_error", str(e))
 
@@ -367,14 +371,15 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             self._log_finalize(500, error_msg=str(e))
 
-    def _blocking_session(self, prompt, model, system, key):
+    def _blocking_session(self, prompt, model, system, key, input_format="text"):
         """Run linked to the key's session: resume it, persist, serialize."""
         cwd = str(sessions.WORKSPACE)
         with sessions.key_lock(key):
             resume_id = sessions.get_session_id(key)
             try:
                 wrapper = run_blocking(prompt, model=model, system=system,
-                                       resume=resume_id, persist=True, cwd=cwd)
+                                       resume=resume_id, persist=True, cwd=cwd,
+                                       input_format=input_format)
             except ClaudeError as e:
                 # Only start over if the session id is genuinely bad — a transient
                 # error (rate limit, backend hiccup) must NOT destroy the link.
@@ -383,7 +388,8 @@ class Handler(BaseHTTPRequestHandler):
                 sessions.forget_session(key)
                 try:
                     wrapper = run_blocking(prompt, model=model, system=system,
-                                           resume=None, persist=True, cwd=cwd)
+                                           resume=None, persist=True, cwd=cwd,
+                                           input_format=input_format)
                 except ClaudeError as e2:
                     return self._send_error(500, "api_error", str(e2))
             sid = wrapper.get("session_id")
@@ -391,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
                 sessions.record_session(key, sid)
         self._send_json(200, translate.wrapper_to_message(wrapper, model))
 
-    def _stream_messages(self, prompt, model, system, key):
+    def _stream_messages(self, prompt, model, system, key, input_format="text"):
         # SSE has no Content-Length and we don't chunk-encode, so the client
         # detects end-of-stream by EOF. Close the connection when done.
         self.close_connection = True
@@ -417,7 +423,8 @@ class Handler(BaseHTTPRequestHandler):
             log_in = log_out = None
             for kind, obj in stream_events(prompt, model=model, system=system,
                                            resume=resume_id, persist=bool(key),
-                                           cwd=str(sessions.WORKSPACE) if key else None):
+                                           cwd=str(sessions.WORKSPACE) if key else None,
+                                           input_format=input_format):
                 if kind == "session":
                     captured_sid = obj
                 elif kind == "event":

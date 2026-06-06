@@ -45,9 +45,52 @@ def _content_to_text(content):
             parts.append(_content_to_text(inner) if inner is not None else "")
         elif btype == "tool_use":
             parts.append(f"[tool_use {block.get('name', '')}: {json.dumps(block.get('input', {}))}]")
-        elif btype == "image":
-            parts.append("[image omitted — image input is not supported by the CLI proxy]")
+        # `image` blocks are intentionally not flattened to text here. When a
+        # request carries images, build_cli_input() routes the whole thing
+        # through the CLI's stream-json input (which accepts image content) and
+        # the images ride in their own channel — see _iter_image_blocks below.
     return "\n".join(p for p in parts if p)
+
+
+def _iter_image_blocks(messages):
+    """Yield every `image` content block across a Messages conversation, in order."""
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "image":
+                    yield block
+
+
+def build_cli_input(messages):
+    """Decide how to feed a Messages request to the local `claude` CLI.
+
+    Returns an (input_format, payload) pair:
+
+      ("text", prompt_str)
+          No images present. `payload` is the flat prompt that goes to
+          `claude -p` over stdin — the default, unchanged behavior.
+
+      ("stream-json", jsonl_str)
+          One or more `image` blocks present. The plain text CLI can't take
+          image input, but `claude --input-format stream-json` accepts an
+          Anthropic-shaped user message — including image content blocks. We
+          render the conversation's text into one transcript block and append
+          every image block after it, as a single user message (one JSONL line).
+    """
+    msgs = [m for m in messages if isinstance(m, dict)]
+    images = list(_iter_image_blocks(msgs))
+    text = messages_to_prompt(msgs)
+    if not images:
+        return ("text", text)
+    content = []
+    if text:
+        content.append({"type": "text", "text": text})
+    content.extend(images)
+    line = {"type": "user", "message": {"role": "user", "content": content}}
+    return ("stream-json", json.dumps(line) + "\n")
 
 
 def messages_to_prompt(messages):
