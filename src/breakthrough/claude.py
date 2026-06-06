@@ -72,6 +72,30 @@ DEFAULT_SYSTEM = "You are a helpful AI assistant."
 
 DEFAULT_MODEL = os.environ.get("BREAKTHROUGH_MODEL", os.environ.get("MODEL", "sonnet"))
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
+
+# Claude Code's `--model` takes tier aliases — "opus" / "sonnet" / "haiku" (and a
+# few suffixed forms like "sonnet[1m]"). Clients, though, send full Anthropic API
+# model ids: "claude-3-5-sonnet-20241022", "claude-sonnet-4-6", "claude-opus-4-1",
+# etc. Passing those raw makes the CLI error on an unrecognized model. So we map any
+# requested id to the matching CLI tier, so real SDK code "just works." The response
+# still echoes back the model the client asked for (see translate.wrapper_to_message);
+# only the CLI invocation is remapped. Unknown strings fall back to the default tier
+# rather than failing the request.
+_MODEL_ALIASES = ("opus", "sonnet", "haiku")
+
+
+def cli_model(requested):
+    """Translate a requested model into a value Claude Code's --model accepts."""
+    if not requested:
+        return DEFAULT_MODEL
+    m = requested.strip()
+    low = m.lower()
+    if low.split("[", 1)[0] in _MODEL_ALIASES:  # already an alias (maybe "sonnet[1m]")
+        return m
+    for tier in _MODEL_ALIASES:                 # full id carries exactly one family
+        if tier in low:
+            return tier
+    return DEFAULT_MODEL                         # unknown -> nearest default, never error
 GEN_TIMEOUT_S = float(os.environ.get("GEN_TIMEOUT_MS", "120000")) / 1000.0
 
 
@@ -172,7 +196,7 @@ def _base_args(model, system, resume=None, persist=False, web=False):
     if resume:
         args += ["--resume", resume]
     if model:
-        args += ["--model", model]
+        args += ["--model", cli_model(model)]
     return args
 
 

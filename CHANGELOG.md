@@ -4,6 +4,14 @@ All notable changes to Breakthrough are recorded here, newest first. Versions ar
 tagged in git and published as [GitHub releases](https://github.com/Blacklord100/breakthrough-cli/releases)
 with the `.dmg`, `.whl`, and `.tar.gz` attached.
 
+## v0.7.1 — 2026-06-06
+- **Any Anthropic model id "just works."** Full ids like
+  `claude-3-5-sonnet-20241022` / `claude-sonnet-4-6` / `claude-opus-4-1` are now
+  mapped to the matching Claude Code tier (`sonnet`/`opus`/`haiku`) instead of
+  erroring on an unrecognized `--model`; unknown strings fall back to the default
+  tier. The response still echoes back the exact id the client requested, so it's a
+  true drop-in for real SDK code.
+
 ## v0.7.0 — 2026-06-06
 - **In-app update notifications.** The menu-bar app checks a public feed
   (`appcast.json`) in the background and surfaces "⬆ Download vX.Y.Z…" plus a

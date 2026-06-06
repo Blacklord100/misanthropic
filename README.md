@@ -2,7 +2,7 @@
 
 **An Anthropic-API-compatible server that runs on your local Claude Code CLI.**
 
-*Current version: **v0.7.0** — see [CHANGELOG.md](CHANGELOG.md).*
+*Current version: **v0.7.1** — see [CHANGELOG.md](CHANGELOG.md).*
 
 Point any Anthropic SDK or HTTP client at `breakthrough` and it behaves exactly
 like the hosted Messages API — same request shape, same response shape, same
@@ -295,6 +295,11 @@ hosted API:
 
 - **`max_tokens`, `temperature`, `top_p`, `stop_sequences`** are accepted but not
   enforced — the CLI doesn't expose those knobs in print mode.
+- **Any Claude model id works.** Full Anthropic ids (`claude-sonnet-4-6`,
+  `claude-3-5-sonnet-20241022`, `claude-opus-4-1`, …) and short aliases
+  (`sonnet`/`opus`/`haiku`) are both accepted; the proxy resolves each to the
+  matching Claude Code tier, and the response echoes back the id you asked for.
+  An unrecognized model falls back to the default tier instead of erroring.
 - **`tools` (function calling)** isn't supported. (Web search *is* — see above.)
 - **Image inputs are supported.** Send standard Anthropic `image` content blocks
   (base64) and they're passed straight through to the model via the CLI's
