@@ -33,6 +33,11 @@ from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, run_web, stream_ev
 # Single shared secret for stateless mode. Ignored when approved keys exist.
 API_KEY = os.environ.get("BREAKTHROUGH_API_KEY")
 
+# The activity log keeps the full prompt/response text so the dashboard can show
+# it in full when a row is expanded. This cap is only a runaway guard for a
+# pathologically huge message — normal text passes through untouched.
+MAX_LOG_TEXT = 100_000
+
 
 def _is_invalid_session_error(message):
     """True if the error looks like a bad/missing session id (vs. transient)."""
@@ -86,9 +91,10 @@ class Handler(BaseHTTPRequestHandler):
             return "web"
         return "stateless"
 
-    def _last_user_preview(self, body):
-        """First 80 chars of the last user message's text — the most useful
-        thing to see in the activity log when debugging."""
+    def _last_user_text(self, body):
+        """The full text of the last user message — shown in the activity log
+        when a row is expanded. Multiple text blocks are joined; non-text blocks
+        (e.g. images) are skipped."""
         msgs = body.get("messages")
         if not isinstance(msgs, list) or not msgs:
             return ""
@@ -97,11 +103,11 @@ class Handler(BaseHTTPRequestHandler):
             return ""
         content = last.get("content")
         if isinstance(content, str):
-            return content[:80]
+            return content[:MAX_LOG_TEXT]
         if isinstance(content, list):
-            for blk in content:
-                if isinstance(blk, dict) and blk.get("type") == "text":
-                    return (blk.get("text") or "")[:80]
+            parts = [blk.get("text") or "" for blk in content
+                     if isinstance(blk, dict) and blk.get("type") == "text"]
+            return "\n".join(p for p in parts if p)[:MAX_LOG_TEXT]
         return ""
 
     def _log_start(self, body, key, linked):
@@ -111,11 +117,11 @@ class Handler(BaseHTTPRequestHandler):
             "model": body.get("model") or DEFAULT_MODEL,
             "mode": self._request_mode(linked),
             "stream": bool(body.get("stream")),
-            "prompt_preview": self._last_user_preview(body),
+            "prompt_text": self._last_user_text(body),
         }
 
     def _log_finalize(self, status, message_obj=None, error_msg=None,
-                      in_tokens=None, out_tokens=None, response_preview=None):
+                      in_tokens=None, out_tokens=None, response_text=None):
         rec = getattr(self, "_log_rec", None)
         if rec is None:
             return
@@ -125,18 +131,17 @@ class Handler(BaseHTTPRequestHandler):
             usage = message_obj.get("usage") or {}
             rec["input_tokens"] = usage.get("input_tokens", 0)
             rec["output_tokens"] = usage.get("output_tokens", 0)
-            for blk in message_obj.get("content") or []:
-                if isinstance(blk, dict) and blk.get("type") == "text":
-                    rec["response_preview"] = (blk.get("text") or "")[:80]
-                    break
+            parts = [blk.get("text") or "" for blk in (message_obj.get("content") or [])
+                     if isinstance(blk, dict) and blk.get("type") == "text"]
+            rec["response_text"] = "\n".join(p for p in parts if p)[:MAX_LOG_TEXT]
         if in_tokens is not None:
             rec["input_tokens"] = in_tokens
         if out_tokens is not None:
             rec["output_tokens"] = out_tokens
-        if response_preview is not None:
-            rec["response_preview"] = response_preview[:80]
+        if response_text is not None:
+            rec["response_text"] = response_text[:MAX_LOG_TEXT]
         if error_msg:
-            rec["error"] = str(error_msg)[:200]
+            rec["error"] = str(error_msg)[:MAX_LOG_TEXT]
         request_log.append(rec)
         self._log_rec = None
 
@@ -347,19 +352,18 @@ class Handler(BaseHTTPRequestHandler):
         usage = translate.web_usage(wrapper)
         stop_reason = wrapper.get("stop_reason") or "end_turn"
         message_id = translate._message_id(wrapper)
-        # Pre-compute the activity-log preview from the first text block.
-        preview = ""
-        for blk in content:
-            if blk.get("type") == "text" and blk.get("text"):
-                preview = blk["text"][:80]
-                break
+        # Full assistant text (all text blocks joined) for the activity log.
+        response_text = "\n".join(
+            blk["text"] for blk in content
+            if blk.get("type") == "text" and blk.get("text")
+        )
         try:
             for event_type, data in translate.web_sse_events(content, usage, stop_reason, model, message_id):
                 sse(event_type, data)
             self._log_finalize(200,
                                in_tokens=usage.get("input_tokens"),
                                out_tokens=usage.get("output_tokens"),
-                               response_preview=preview)
+                               response_text=response_text)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client hung up mid-stream
         except Exception as e:
@@ -421,6 +425,7 @@ class Handler(BaseHTTPRequestHandler):
             captured_sid = None
             saw_error = False
             log_in = log_out = None
+            text_parts = []  # accumulate streamed text for the activity log
             for kind, obj in stream_events(prompt, model=model, system=system,
                                            resume=resume_id, persist=bool(key),
                                            cwd=str(sessions.WORKSPACE) if key else None,
@@ -436,6 +441,10 @@ class Handler(BaseHTTPRequestHandler):
                         ot = (obj.get("usage") or {}).get("output_tokens")
                         if ot is not None:
                             log_out = ot
+                    elif et == "content_block_delta":
+                        delta = obj.get("delta") or {}
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            text_parts.append(delta["text"])
                     sse(et or "message_delta", obj)
                 elif kind == "error":
                     saw_error = True
@@ -448,7 +457,7 @@ class Handler(BaseHTTPRequestHandler):
             self._log_finalize(
                 500 if saw_error else 200,
                 in_tokens=log_in, out_tokens=log_out,
-                response_preview="[streamed]" if not saw_error else None,
+                response_text="".join(text_parts) if not saw_error else None,
                 error_msg="upstream stream error" if saw_error else None,
             )
         except ClaudeError as e:

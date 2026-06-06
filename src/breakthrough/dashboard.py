@@ -46,7 +46,8 @@ PAGE = r"""<!doctype html>
   table.reqs td { padding:8px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
   table.reqs tr:last-child td { border-bottom:0; }
   table.reqs tr.preview td { padding:0 12px 10px 12px; border-bottom:1px solid var(--line); white-space:normal; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--dim); }
-  .pv-line { display:block; margin-top:4px; }
+  .pv-body { max-height:280px; overflow:auto; }
+  .pv-line { display:block; margin-top:4px; white-space:pre-wrap; word-break:break-word; }
   .pv-line.prompt { color:var(--acc); }
   .pv-line.reply { color:var(--ok); }
   .ok { color:var(--ok); }
@@ -72,7 +73,7 @@ PAGE = r"""<!doctype html>
   <div class="activity-head">
     <h2>Recent activity</h2>
     <div class="grow"></div>
-    <button class="ghost" id="pv-toggle">Show previews</button>
+    <button class="ghost" id="pv-toggle">Show full text</button>
   </div>
   <div id="requests" class="reqwrap"></div>
 </main>
@@ -120,7 +121,7 @@ async function del(key){
 load();
 
 // --- recent activity --------------------------------------------------
-let showPreviews = false;
+let showText = false;
 let lastReqs = [];
 function esc(s){ return String(s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function fmtTime(ts){ const d=new Date(ts*1000); return d.toLocaleTimeString([], {hour12:false}); }
@@ -135,10 +136,10 @@ function renderRequests(reqs){
     const modeClass = (r.mode||"").replace("+","-");
     const mode = `<span class="badge-mode ${modeClass}">${esc(r.mode||"")}${r.stream?" · stream":""}</span>`;
     let pv = "";
-    if(showPreviews){
-      const prompt = r.prompt_preview ? `<span class="pv-line prompt">› ${esc(r.prompt_preview)}${r.prompt_preview.length>=80?"…":""}</span>` : "";
-      const reply = r.response_preview ? `<span class="pv-line reply">‹ ${esc(r.response_preview)}${r.response_preview.length>=80?"…":""}</span>` : (r.error ? `<span class="pv-line err">‹ ${esc(r.error)}</span>` : "");
-      if(prompt || reply) pv = `<tr class="preview"><td colspan="7">${prompt}${reply}</td></tr>`;
+    if(showText){
+      const prompt = r.prompt_text ? `<span class="pv-line prompt">› ${esc(r.prompt_text)}</span>` : "";
+      const reply = r.response_text ? `<span class="pv-line reply">‹ ${esc(r.response_text)}</span>` : (r.error ? `<span class="pv-line err">‹ ${esc(r.error)}</span>` : "");
+      if(prompt || reply) pv = `<tr class="preview"><td colspan="7"><div class="pv-body">${prompt}${reply}</div></td></tr>`;
     }
     return `<tr>
       <td class="mono">${fmtTime(r.ts)}</td>
@@ -159,8 +160,8 @@ async function pollRequests(){
   } catch(e){}
 }
 $("#pv-toggle").onclick = () => {
-  showPreviews = !showPreviews;
-  $("#pv-toggle").textContent = showPreviews ? "Hide previews" : "Show previews";
+  showText = !showText;
+  $("#pv-toggle").textContent = showText ? "Hide full text" : "Show full text";
   renderRequests(lastReqs);
 };
 pollRequests();
