@@ -4,6 +4,15 @@ All notable changes to Breakthrough are recorded here, newest first. Versions ar
 tagged in git and published as [GitHub releases](https://github.com/Blacklord100/breakthrough-cli/releases)
 with the `.dmg`, `.whl`, and `.tar.gz` attached.
 
+## v0.7.2 — 2026-06-06
+- **Fix: "`claude` CLI not found on PATH" when the app is launched from Finder or
+  at login.** macOS gives a launched app a minimal PATH that omits Homebrew
+  (`/opt/homebrew/bin`), `~/.local/bin`, npm globals, and node-version-manager
+  dirs — so the bundled server couldn't find `claude` even though your terminal
+  can. The server now discovers `claude` via the current PATH, then your login
+  shell, then common install locations, and runs it with an augmented PATH. Set
+  `CLAUDE_BIN` to override.
+
 ## v0.7.1 — 2026-06-06
 - **Any Anthropic model id "just works."** Full ids like
   `claude-3-5-sonnet-20241022` / `claude-sonnet-4-6` / `claude-opus-4-1` are now

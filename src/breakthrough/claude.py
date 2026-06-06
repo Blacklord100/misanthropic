@@ -13,6 +13,7 @@ Two modes:
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 
@@ -71,7 +72,84 @@ def set_web_enabled(value):
 DEFAULT_SYSTEM = "You are a helpful AI assistant."
 
 DEFAULT_MODEL = os.environ.get("BREAKTHROUGH_MODEL", os.environ.get("MODEL", "sonnet"))
-CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
+# Explicit override (if the user set it). When unset we *discover* claude — see
+# claude_bin() — because a .app launched from Finder/login gets a minimal PATH
+# (/usr/bin:/bin:...) that omits Homebrew (/opt/homebrew/bin), ~/.local/bin, npm
+# globals, and node-version-manager dirs, so a plain which("claude") fails even
+# though the user's terminal finds it. The #1 "works in my terminal, not from the
+# app" footgun.
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN")
+
+_COMMON_CLAUDE_PATHS = (
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    "~/.local/bin/claude",
+    "~/.claude/local/claude",
+    "~/.npm-global/bin/claude",
+    "~/bin/claude",
+)
+_resolved_claude = None
+
+
+def claude_bin():
+    """Resolve the `claude` executable robustly, regardless of launch PATH.
+
+    Order: explicit CLAUDE_BIN -> current PATH -> the user's login shell (which
+    sources their rc, picking up brew/nvm/fnm/asdf) -> common install locations.
+    The first success is cached. Falls back to the bare name "claude" (the spawn
+    then raises a clear ClaudeError) when nothing is found.
+    """
+    global _resolved_claude
+    if CLAUDE_BIN:
+        return CLAUDE_BIN
+    if _resolved_claude:
+        return _resolved_claude
+
+    found = shutil.which("claude")
+    if not found:
+        shell = os.environ.get("SHELL", "/bin/zsh")
+        try:
+            out = subprocess.run([shell, "-lic", "command -v claude"],
+                                 capture_output=True, text=True, timeout=10)
+            for line in reversed(out.stdout.strip().splitlines()):
+                cand = os.path.expanduser(line.strip())
+                if cand and os.path.exists(cand):
+                    found = cand
+                    break
+        except Exception:
+            pass
+    if not found:
+        for cand in _COMMON_CLAUDE_PATHS:
+            cand = os.path.expanduser(cand)
+            if os.path.exists(cand):
+                found = cand
+                break
+
+    if found:
+        _resolved_claude = found
+    return found or "claude"
+
+
+def claude_available():
+    """True if a `claude` binary can be located (used by the app's startup check)."""
+    b = claude_bin()
+    return bool(shutil.which(b) or os.path.exists(os.path.expanduser(b)))
+
+
+def _child_env():
+    """Environment for the claude subprocess: os.environ with PATH augmented so
+    both we and claude can find the binary and its runtime (node, etc.) even when
+    the app inherited a minimal launchd PATH."""
+    env = dict(os.environ)
+    parts = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
+    extra = [os.path.dirname(claude_bin()), "/opt/homebrew/bin", "/usr/local/bin",
+             os.path.expanduser("~/.local/bin"), "/usr/bin", "/bin"]
+    for p in extra:
+        if p and p not in parts:
+            parts.append(p)
+    env["PATH"] = os.pathsep.join(parts)
+    return env
+
 
 # Claude Code's `--model` takes tier aliases — "opus" / "sonnet" / "haiku" (and a
 # few suffixed forms like "sonnet[1m]"). Clients, though, send full Anthropic API
@@ -125,6 +203,7 @@ def _spawn_claude(args, prompt, cwd):
             errors="replace",
             bufsize=1,
             cwd=cwd,
+            env=_child_env(),
         )
     except FileNotFoundError:
         raise ClaudeError(
@@ -174,7 +253,7 @@ def _kill_watchdog(proc, timeout_s):
 
 def _base_args(model, system, resume=None, persist=False, web=False):
     args = [
-        CLAUDE_BIN,
+        claude_bin(),
         "-p",
         "--system-prompt", system if system else DEFAULT_SYSTEM,
     ]
@@ -282,6 +361,7 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
             errors="replace",
             timeout=timeout if timeout is not None else GEN_TIMEOUT_S,
             cwd=cwd,
+            env=_child_env(),
         )
     except FileNotFoundError:
         raise ClaudeError(

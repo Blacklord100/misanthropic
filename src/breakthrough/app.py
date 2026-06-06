@@ -27,8 +27,11 @@ ICON_PATH = Path(__file__).parent / "resources" / "menubar.png"
 
 
 def _claude_ready():
-    """Is the `claude` CLI installed? (Auth itself is checked on first request.)"""
-    return shutil.which(os.environ.get("CLAUDE_BIN", "claude")) is not None
+    """Is the `claude` CLI installed? (Auth itself is checked on first request.)
+
+    Uses claude.claude_available() — which discovers claude even under the minimal
+    PATH a Finder/login-launched .app inherits — not a bare which() on this PATH."""
+    return claude.claude_available()
 
 
 def _running_app_bundle():

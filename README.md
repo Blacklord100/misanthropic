@@ -2,7 +2,7 @@
 
 **An Anthropic-API-compatible server that runs on your local Claude Code CLI.**
 
-*Current version: **v0.7.1** — see [CHANGELOG.md](CHANGELOG.md).*
+*Current version: **v0.7.2** — see [CHANGELOG.md](CHANGELOG.md).*
 
 Point any Anthropic SDK or HTTP client at `breakthrough` and it behaves exactly
 like the hosted Messages API — same request shape, same response shape, same
