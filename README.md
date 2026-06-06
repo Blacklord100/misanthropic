@@ -2,6 +2,8 @@
 
 **An Anthropic-API-compatible server that runs on your local Claude Code CLI.**
 
+*Current version: **v0.6.2** — see [CHANGELOG.md](CHANGELOG.md).*
+
 Point any Anthropic SDK or HTTP client at `breakthrough` and it behaves exactly
 like the hosted Messages API — same request shape, same response shape, same
 streaming events. The difference is invisible to your code: instead of calling
@@ -104,7 +106,13 @@ dashboard, copy the base URL, and toggle "start at login". The dashboard
 - generate per-project API keys (formatted `sk-ant-local-…` so they drop into
   any Anthropic-SDK tooling),
 - copy ready-to-paste connection snippets (`ANTHROPIC_BASE_URL` + key),
-- see and delete keys / conversations.
+- see and delete keys / conversations,
+- watch a live **Recent activity** log: each request shows time, key, model,
+  mode, tokens, duration, and status, refreshed as calls come in. Hit **Show
+  full text** to expand a row and read the entire prompt and response (newlines
+  preserved; long messages scroll, and an open row keeps its place while the log
+  refreshes). It's an in-memory ring buffer for local debugging — cleared on
+  restart, never persisted.
 
 Each generated key is an approved session key (see below), so connecting a
 project and getting persistent memory is one click. The admin/dashboard endpoints
@@ -178,6 +186,7 @@ Concurrent requests sharing a key are serialized. Approve keys via the CLI or th
 | `GET`  | `/health`                   | Liveness check.                              |
 | `GET`  | `/`                         | Web dashboard (manage keys + sessions).      |
 | `GET`  | `/admin/state`              | Dashboard state (keys, sessions). **Localhost-only.** |
+| `GET`  | `/admin/requests`           | Recent request log (ring buffer). **Localhost-only.** |
 | `POST` | `/admin/keys`               | Create a key. **Localhost-only.**            |
 | `POST` | `/admin/keys/delete`        | Remove a key. **Localhost-only.**            |
 | `POST` | `/admin/sessions/forget`    | Reset a key's session link. **Localhost-only.** |
@@ -248,6 +257,12 @@ behave like the bare Messages API rather than an agent:
 For non-streaming, the CLI's JSON (`result`, `stop_reason`, `usage`) is reshaped
 into a Messages response. For streaming, the CLI emits the raw Anthropic stream
 events, which are forwarded verbatim as Server-Sent Events.
+
+When a request carries an `image` content block, the flow switches from a plain
+text prompt to `claude --input-format stream-json` — the only CLI path that
+accepts image content — feeding one Anthropic-shaped user message (the rendered
+text plus the image blocks). This applies in stateless, session, streaming, and
+web modes.
 
 With `BREAKTHROUGH_WEB=1` the invocation changes to `--tools WebSearch
 --allowedTools WebSearch --max-turns 16` and always runs `stream-json` (even for
