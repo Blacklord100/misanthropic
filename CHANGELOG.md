@@ -4,6 +4,13 @@ All notable changes to Breakthrough are recorded here, newest first. Versions ar
 tagged in git and published as [GitHub releases](https://github.com/Blacklord100/breakthrough-cli/releases)
 with the `.dmg`, `.whl`, and `.tar.gz` attached.
 
+## v0.7.0 — 2026-06-06
+- **In-app update notifications.** The menu-bar app checks a public feed
+  (`appcast.json`) in the background and surfaces "⬆ Download vX.Y.Z…" plus a
+  notification when a newer build ships. Adds **Check for Updates…**, an
+  **Auto-check for updates** toggle, and **Skip This Version**. Notify-only — no
+  silent download/replace yet; pure stdlib, no new dependencies.
+
 ## v0.6.2 — 2026-06-06
 - Fix: scrolling inside an expanded **Recent activity** row no longer snaps back
   to the top. The dashboard now re-renders only when the request set actually

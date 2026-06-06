@@ -2,7 +2,7 @@
 
 **An Anthropic-API-compatible server that runs on your local Claude Code CLI.**
 
-*Current version: **v0.6.2** — see [CHANGELOG.md](CHANGELOG.md).*
+*Current version: **v0.7.0** — see [CHANGELOG.md](CHANGELOG.md).*
 
 Point any Anthropic SDK or HTTP client at `breakthrough` and it behaves exactly
 like the hosted Messages API — same request shape, same response shape, same
@@ -123,6 +123,21 @@ For signing/notarizing to share the app with others, see
 [packaging/DISTRIBUTION.md](packaging/DISTRIBUTION.md). Note: the app uses each
 user's *own* local Claude login — you ship the tool, not your subscription.
 
+## Updates
+
+The menu-bar app checks for new versions in the background and tells you when one
+ships — it never updates silently. When a newer build is available the menu item
+becomes **⬆ Download vX.Y.Z…** and you get a notification; clicking it opens the
+download page with the `.dmg`. Use **Check for Updates…** to check on demand,
+flip **Auto-check for updates** off to disable the background check, or choose
+**Skip This Version** in the prompt to silence a release you don't want.
+
+The check reads a small public manifest (`appcast.json`) — it sends nothing about
+you and needs no credentials. The source repo stays private; only the published
+build is public. Point `BREAKTHROUGH_APPCAST_URL` at your own feed to override it.
+(For now the update is a re-install — download the new `.dmg` and replace the app;
+there's no silent in-place replace yet.)
+
 ## Key-linked sessions (stateful conversations)
 
 By default the server is **stateless** — like the hosted API, each request is
@@ -207,6 +222,8 @@ Environment variables:
   (same as `breakthrough keys add`).
 - `BREAKTHROUGH_HOME` — where keys/sessions/workspace state lives. Defaults to
   `~/.breakthrough`.
+- `BREAKTHROUGH_APPCAST_URL` — override the update-check manifest URL (the
+  menu-bar app's "check for updates" feed). Defaults to the public release feed.
 - `BREAKTHROUGH_WEB` — set to `1` to enable web search (see below). Off by default.
 - `BREAKTHROUGH_WEB_MAX_TURNS` — agentic turn cap when web is on. Defaults `16`.
 - `BREAKTHROUGH_WEB_TIMEOUT_MS` — watchdog timeout for a web run (the loop can legitimately

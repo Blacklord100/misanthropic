@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "breakthrough"
-version = "0.6.2"
+version = "0.7.0"
 description = "Anthropic-API-compatible server backed by your local Claude Code CLI. No API key."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -1,0 +1,155 @@
+"""Check a public appcast for a newer Breakthrough release.
+
+The menu-bar app polls this so people who installed the `.dmg` learn when a newer
+build ships. v1 only *notifies* (and opens the download page) — it never downloads
+or replaces anything. Pure stdlib, so the package keeps its zero runtime deps.
+
+Every failure path is swallowed and returns ``None``: a flaky network, a missing
+feed, or malformed JSON must never break or hang the app.
+
+The feed is a small JSON manifest hosted in a **public** repo (the source repo
+stays private — only the distributable build is public). Schema::
+
+    {
+      "version": "0.7.0",
+      "download_page": "https://github.com/.../releases/tag/v0.7.0",
+      "dmg_url": "https://github.com/.../Breakthrough-0.7.0.dmg",  # reserved (auto-install phase)
+      "sha256": "<dmg sha256>",                                    # reserved
+      "notes": "short summary",
+      "min_macos": "11.0"
+    }
+
+Point `BREAKTHROUGH_APPCAST_URL` at a local ``file://`` manifest to test.
+"""
+
+import json
+import os
+import ssl
+import urllib.request
+from datetime import datetime, timezone
+
+from . import __version__
+from .sessions import CONFIG_DIR
+
+APPCAST_URL = os.environ.get(
+    "BREAKTHROUGH_APPCAST_URL",
+    "https://raw.githubusercontent.com/Blacklord100/breakthrough-releases/main/appcast.json",
+)
+STATE_FILE = CONFIG_DIR / "updater.json"
+_TIMEOUT_S = 6
+
+
+# ---- version comparison -----------------------------------------------------
+
+def parse_version(s):
+    """'v1.2.3' / '1.2.3-rc1' -> a comparable tuple of ints.
+
+    Splits on '.' after dropping any pre-release suffix, so '1.2.3-rc1' compares
+    as (1, 2, 3) — slightly lenient, fine for our simple MAJOR.MINOR.PATCH tags.
+    Non-numeric chunks degrade to 0 rather than raising.
+    """
+    s = (s or "").strip().lstrip("vV")
+    main = s.split("-", 1)[0].split("+", 1)[0]
+    parts = []
+    for chunk in main.split("."):
+        try:
+            parts.append(int(chunk))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts) or (0,)
+
+
+def is_newer(remote, current):
+    return parse_version(remote) > parse_version(current)
+
+
+# ---- feed fetch -------------------------------------------------------------
+
+def _fetch_json(url, timeout=_TIMEOUT_S):
+    """GET the appcast and parse it. Returns a dict, or None on any failure."""
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": f"breakthrough/{__version__}"}
+        )
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+# ---- persisted prefs (~/.breakthrough/updater.json) -------------------------
+#
+# Mirrors the atomic-write pattern in sessions.py so a crash can't corrupt it.
+
+def _load_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_state(state):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    os.replace(tmp, STATE_FILE)  # atomic
+
+
+def auto_check_enabled():
+    return bool(_load_state().get("auto_check", True))
+
+
+def set_auto_check(enabled):
+    s = _load_state()
+    s["auto_check"] = bool(enabled)
+    _save_state(s)
+    return bool(enabled)
+
+
+def is_skipped(version):
+    return _load_state().get("skipped_version") == version
+
+
+def mark_skipped(version):
+    s = _load_state()
+    s["skipped_version"] = version
+    _save_state(s)
+
+
+def already_notified(version):
+    return _load_state().get("last_notified_version") == version
+
+
+def mark_notified(version):
+    s = _load_state()
+    s["last_notified_version"] = version
+    _save_state(s)
+
+
+# ---- the check --------------------------------------------------------------
+
+def check_for_update(current=None, url=None, respect_skip=True):
+    """Return the appcast dict if a newer release exists, else None. Never raises.
+
+    `current` defaults to the running version, `url` to APPCAST_URL. A manual
+    check should pass ``respect_skip=False`` so an explicitly-requested check
+    still surfaces a version the user previously chose to skip.
+    """
+    current = current or __version__
+    data = _fetch_json(url or APPCAST_URL)
+    if not data:
+        return None
+    remote = data.get("version")
+    if not remote or not is_newer(remote, current):
+        return None
+    if respect_skip and is_skipped(remote):
+        return None
+    try:
+        s = _load_state()
+        s["last_check"] = datetime.now(timezone.utc).isoformat()
+        _save_state(s)
+    except Exception:
+        pass
+    return data
