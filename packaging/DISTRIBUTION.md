@@ -20,8 +20,12 @@ bash packaging/build.sh
 open dist/Breakthrough.app
 ```
 
-Unsigned apps are fine for yourself. On first launch macOS Gatekeeper may block
-it — right-click the app → **Open** → **Open**.
+Unsigned apps are fine for yourself. On first launch macOS Gatekeeper blocks it
+("Apple could not verify…"). On **macOS 15+ (Sequoia/Tahoe)** the old right-click
+→ Open trick no longer works: open **System Settings → Privacy & Security → Open
+Anyway**, or clear the quarantine flag from Terminal:
+`xattr -dr com.apple.quarantine /Applications/Breakthrough.app`. (On macOS ≤ Sonoma,
+right-click the app → **Open** → **Open** still works.)
 
 ## 3. Sign + notarize (required to share without scary warnings)
 

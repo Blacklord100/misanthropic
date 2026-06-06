@@ -19,5 +19,6 @@ python packaging/setup_app.py py2app
 
 echo "==> Done: dist/Breakthrough.app"
 echo "    Try it:  open dist/Breakthrough.app"
-echo "    (First launch on another Mac: right-click -> Open, to clear Gatekeeper,"
+echo "    (First launch on another Mac (macOS 15+): System Settings -> Privacy &"
+echo "     Security -> Open Anyway, or: xattr -dr com.apple.quarantine the .app;"
 echo "     or sign + notarize per packaging/DISTRIBUTION.md before sharing.)"

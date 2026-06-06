@@ -5,8 +5,9 @@
 # Output: dist/Breakthrough-<version>.dmg (UDZO, openable on any Mac).
 #
 # Unsigned: recipients hit Gatekeeper on first launch ("can't be verified").
-# They right-click -> Open once to clear it. For a clean launch experience on
-# other Macs, sign + notarize per packaging/DISTRIBUTION.md before sharing.
+# On macOS 15+ they allow it via System Settings -> Privacy & Security -> Open
+# Anyway (or `xattr -dr com.apple.quarantine` the .app). For a clean launch
+# experience on other Macs, sign + notarize per packaging/DISTRIBUTION.md.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -28,4 +29,5 @@ hdiutil create \
 
 echo "==> Done: $DMG ($(du -h "$DMG" | cut -f1))"
 echo "    Share it. Recipients: open the .dmg, drag Breakthrough.app to /Applications,"
-echo "    right-click -> Open the first time to clear Gatekeeper (unsigned build)."
+echo "    then allow it the first time: System Settings -> Privacy & Security ->"
+echo "    Open Anyway (macOS 15+), or xattr -dr com.apple.quarantine the .app."
