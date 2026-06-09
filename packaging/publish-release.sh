@@ -1,55 +1,94 @@
 #!/usr/bin/env bash
-# Publish a release to the PUBLIC feed repo so installed apps can detect + download
-# updates. The source repo stays private; only the distributable build is public.
+# Publish a release to the public repo so installed apps can detect + download
+# updates. Single-repo setup: source, releases, and appcast.json all live in one
+# public repo (default: Blacklord100/misanthropic).
 #
 # Usage:  bash packaging/publish-release.sh [version]
 #         (version defaults to misanthropic.__version__)
 #
 # Prereqs:
-#   - `gh` authenticated with push access to the public feed repo.
+#   - `gh` authenticated with push access to the repo.
 #   - dist/Misanthropic-<version>.dmg already built (build.sh + make_dmg.sh).
+#   - optional: dist/misanthropic-<version>-py3-none-any.whl + .tar.gz (python -m build)
+#     for the pipx install path.
 #
 # Effect:
-#   1. Creates/updates release v<version> in the public repo, attaching the .dmg.
-#   2. Writes appcast.json (version, download_page, dmg_url, sha256, notes) to the
-#      public repo's default branch — the manifest the app polls.
+#   1. Creates/updates release v<version>, attaching the .dmg (+ wheel/sdist if present),
+#      with auto-generated install instructions in the body.
+#   2. Commits/pushes appcast.json at the repo root — the manifest the app polls.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-PUBLIC_REPO="${MISANTHROPIC_PUBLIC_REPO:-Blacklord100/misanthropic-releases}"
+REPO="${MISANTHROPIC_PUBLIC_REPO:-Blacklord100/misanthropic}"
+BRANCH="${MISANTHROPIC_RELEASE_BRANCH:-master}"
 VERSION="${1:-$(python3 -c 'import sys; sys.path.insert(0,"src"); from misanthropic import __version__; print(__version__)')}"
 
 TAG="v${VERSION}"
 DMG_NAME="Misanthropic-${VERSION}.dmg"
 DMG="dist/${DMG_NAME}"
+WHL="dist/misanthropic-${VERSION}-py3-none-any.whl"
+SDI="dist/misanthropic-${VERSION}.tar.gz"
 [ -f "$DMG" ] || { echo "error: $DMG not found. Build it first: bash packaging/build.sh && bash packaging/make_dmg.sh" >&2; exit 1; }
 
 SHA256="$(shasum -a 256 "$DMG" | awk '{print $1}')"
-DOWNLOAD_PAGE="https://github.com/${PUBLIC_REPO}/releases/tag/${TAG}"
-DMG_URL="https://github.com/${PUBLIC_REPO}/releases/download/${TAG}/${DMG_NAME}"
+DOWNLOAD_PAGE="https://github.com/${REPO}/releases/tag/${TAG}"
+DMG_URL="https://github.com/${REPO}/releases/download/${TAG}/${DMG_NAME}"
+WHL_URL="https://github.com/${REPO}/releases/download/${TAG}/$(basename "$WHL")"
 
-# Release notes: the matching section of CHANGELOG.md (best-effort, may be empty).
-NOTES="$(awk -v tag="## ${TAG}" 'index($0,tag)==1{f=1;next} /^## v/{if(f)exit} f' CHANGELOG.md || true)"
-[ -n "$NOTES" ] || NOTES="Misanthropic ${VERSION}"
+ASSETS=("$DMG")
+[ -f "$WHL" ] && ASSETS+=("$WHL")
+[ -f "$SDI" ] && ASSETS+=("$SDI")
 
-echo "==> Publishing $TAG to public feed repo: $PUBLIC_REPO"
-echo "    dmg:    $DMG ($(du -h "$DMG" | cut -f1))"
+CHANGE="$(awk -v tag="## ${TAG}" 'index($0,tag)==1{f=1;next} /^## v/{if(f)exit} f' CHANGELOG.md || true)"
+[ -n "$CHANGE" ] || CHANGE="Misanthropic ${VERSION}"
+
+ONELINER="curl -fsSL ${DMG_URL} -o /tmp/m.dmg && hdiutil attach /tmp/m.dmg -nobrowse -quiet && cp -R \"/Volumes/Misanthropic/Misanthropic.app\" /Applications/ && hdiutil detach \"/Volumes/Misanthropic\" -quiet && xattr -dr com.apple.quarantine /Applications/Misanthropic.app && open /Applications/Misanthropic.app"
+
+PIPX_BLOCK=""
+if [ -f "$WHL" ]; then
+  PIPX_BLOCK=$'\n### Option B — no app, no Gatekeeper (pipx)\n\nA pip install isn'\''t a quarantined app, so there'\''s never a warning:\n\n```bash\npipx install "misanthropic[app] @ '"${WHL_URL}"'"\nmisanthropic-app      # menu-bar app   (or:  misanthropic serve)\n```\n'
+fi
+
+NOTES="$(cat <<EOF
+## Install
+
+**Requirements:** macOS 11+, and the [\`claude\`](https://docs.claude.com/en/docs/claude-code) CLI installed and logged in (the app uses *your own* Claude login).
+
+### ⚡ Fast install — one line, no scary warning
+
+Paste this into **Terminal**. It downloads the app, installs it, and opens it — skipping the macOS "can't be verified" prompt:
+
+\`\`\`bash
+${ONELINER}
+\`\`\`
+
+> **Why a warning?** The app isn't *notarized* by Apple (that needs a paid \$99/yr Developer account). It's **not** malware — macOS flags anything downloaded outside the App Store. The \`xattr -dr com.apple.quarantine\` part clears that flag so it opens normally.
+
+### Option A — download the .dmg by hand
+
+Download **${DMG_NAME}** below → open it → drag the skull onto **Applications**. First launch: macOS says *"Apple could not verify…"* → **System Settings → Privacy & Security → Open Anyway**. One time, then it's normal.
+${PIPX_BLOCK}
+---
+
+${CHANGE}
+EOF
+)"
+
+echo "==> Publishing $TAG to: $REPO"
+echo "    assets: ${ASSETS[*]}"
 echo "    sha256: $SHA256"
 
-# Create the release (or just (re)upload the asset if the release already exists).
-if gh release view "$TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
-  gh release upload "$TAG" "$DMG" --repo "$PUBLIC_REPO" --clobber
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+  gh release upload "$TAG" "${ASSETS[@]}" --repo "$REPO" --clobber
+  gh release edit "$TAG" --repo "$REPO" --notes "$NOTES"
 else
-  gh release create "$TAG" "$DMG" --repo "$PUBLIC_REPO" \
+  gh release create "$TAG" "${ASSETS[@]}" --repo "$REPO" \
     --title "Misanthropic ${VERSION}" --notes "$NOTES"
 fi
 
-# Write/refresh appcast.json on the public repo's default branch.
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-git clone --depth 1 "https://github.com/${PUBLIC_REPO}.git" "$TMP/repo" >/dev/null 2>&1
-python3 - "$TMP/repo/appcast.json" "$VERSION" "$DOWNLOAD_PAGE" "$DMG_URL" "$SHA256" "$NOTES" <<'PY'
+# Write/refresh appcast.json at the repo root (this working tree IS the repo).
+python3 - "appcast.json" "$VERSION" "$DOWNLOAD_PAGE" "$DMG_URL" "$SHA256" "$CHANGE" <<'PY'
 import json, sys
 path, version, page, dmg, sha, notes = sys.argv[1:7]
 manifest = {
@@ -57,23 +96,22 @@ manifest = {
     "download_page": page,
     "dmg_url": dmg,
     "sha256": sha,
-    "notes": notes.strip(),
+    "notes": notes.strip()[:500],
     "min_macos": "11.0",
 }
 with open(path, "w") as f:
     json.dump(manifest, f, indent=2)
     f.write("\n")
 PY
-( cd "$TMP/repo"
+if git diff --quiet -- appcast.json; then
+  echo "==> appcast.json already current"
+else
   git add appcast.json
-  if git diff --cached --quiet; then
-    echo "==> appcast.json already current"
-  else
-    git commit -q -m "appcast: v${VERSION}"
-    git push -q
-    echo "==> appcast.json updated"
-  fi )
+  git commit -q -m "appcast: v${VERSION}"
+  git push -q origin "$BRANCH"
+  echo "==> appcast.json updated + pushed"
+fi
 
 echo "==> Done."
-echo "    Feed: https://raw.githubusercontent.com/${PUBLIC_REPO}/main/appcast.json"
+echo "    Feed: https://raw.githubusercontent.com/${REPO}/${BRANCH}/appcast.json"
 echo "    Page: ${DOWNLOAD_PAGE}"

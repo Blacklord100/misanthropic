@@ -7,8 +7,8 @@ or replaces anything. Pure stdlib, so the package keeps its zero runtime deps.
 Every failure path is swallowed and returns ``None``: a flaky network, a missing
 feed, or malformed JSON must never break or hang the app.
 
-The feed is a small JSON manifest hosted in a **public** repo (the source repo
-stays private — only the distributable build is public). Schema::
+The feed is a small JSON manifest (`appcast.json`) committed at the root of the
+public repo and served via raw.githubusercontent.com. Schema::
 
     {
       "version": "0.7.0",
@@ -33,7 +33,7 @@ from .sessions import CONFIG_DIR
 
 APPCAST_URL = os.environ.get(
     "MISANTHROPIC_APPCAST_URL",
-    "https://raw.githubusercontent.com/Blacklord100/misanthropic-releases/main/appcast.json",
+    "https://raw.githubusercontent.com/Blacklord100/misanthropic/master/appcast.json",
 )
 STATE_FILE = CONFIG_DIR / "updater.json"
 _TIMEOUT_S = 6

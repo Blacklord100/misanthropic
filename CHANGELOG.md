@@ -7,6 +7,14 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v0.8.5 — 2026-06-09
+- **Single repo.** Source, releases, and the update feed now live in one public
+  repo (`Blacklord100/misanthropic`) instead of a separate `*-releases` repo. The
+  in-app updater polls `appcast.json` at the repo root; `publish-release.sh`
+  publishes the release (dmg + wheel + sdist), auto-stamps install instructions in
+  the release body, and commits the appcast — all in one place. No behavior change
+  to the app itself.
+
 ## v0.8.4 — 2026-06-09
 - **Savings banner is always visible, and counts sub-cent usage.** It previously
   stayed hidden until the running total crossed a rounded cent — so after a fresh

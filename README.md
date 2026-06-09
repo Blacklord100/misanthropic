@@ -154,9 +154,9 @@ vX.Y.Z…** and you get a notification; clicking it opens the download page with
 updates** off to disable the background check, or pick **Skip This Version** to
 silence a release you don't want.
 
-The check reads a small public manifest (`appcast.json`) — it sends nothing about
-you and needs no credentials. The source repo stays private; only the published
-build is public. Point `MISANTHROPIC_APPCAST_URL` at your own feed to override it.
+The check reads a small public manifest (`appcast.json` at the repo root) — it
+sends nothing about you and needs no credentials. Point `MISANTHROPIC_APPCAST_URL`
+at your own feed to override it.
 (For now an update is a re-install — download the new `.dmg` and replace the app;
 there's no silent in-place swap yet.)
 
