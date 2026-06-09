@@ -7,6 +7,23 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.0.0 — 2026-06-10
+First stable release. The Anthropic Messages API, served from your own Claude Code
+login — no API key, no per-token bill. Everything that landed on the road to 1.0:
+
+- **Drop-in Messages API** over the local `claude` CLI: non-streaming + streaming
+  (SSE), `count_tokens`, all model tiers (full ids and `sonnet`/`opus`/`haiku`
+  aliases), image/vision input, and faithful error shapes.
+- **Per-request web search** driven by the `web_search` tool, with an `auto`/`on`/`off`
+  server policy — mirrors the hosted API.
+- **Key-linked sessions** for stateful, resumable conversations.
+- **"Money saved" counter** — dashboard + `misanthropic savings` show what the
+  hosted API would have charged.
+- **macOS menu-bar app** with a generated skull icon, a styled drag-to-install
+  `.dmg`, and background update checks.
+- **Single public repo** (source + releases + appcast), one-command release flow,
+  `pytest` suite + GitHub Actions CI, and an `AGENTS.md` for AI agents.
+
 ## v0.8.5 — 2026-06-09
 - **Single repo.** Source, releases, and the update feed now live in one public
   repo (`Blacklord100/misanthropic`) instead of a separate `*-releases` repo. The

@@ -10,7 +10,7 @@ no API key, no per-token bill, no call to anyone's server but your own.
 
 **[⬇ Download for macOS](https://github.com/Blacklord100/misanthropic/releases/latest)** · [Install](#install) · [Quick start](#quick-start) · [Tips & tricks](#tips--tricks)
 
-*For personal use only — don't stand it up as a shared server. v0.8.5 · [CHANGELOG](CHANGELOG.md) · formerly Breakthrough.*
+*For personal use only — don't stand it up as a shared server. v1.0.0 · [CHANGELOG](CHANGELOG.md) · formerly Breakthrough.*
 
 </div>
 
