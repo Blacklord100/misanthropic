@@ -47,7 +47,18 @@ ONELINER="curl -fsSL ${DMG_URL} -o /tmp/m.dmg && hdiutil attach /tmp/m.dmg -nobr
 
 PIPX_BLOCK=""
 if [ -f "$WHL" ]; then
-  PIPX_BLOCK=$'\n### Option B — no app, no Gatekeeper (pipx)\n\nA pip install isn'\''t a quarantined app, so there'\''s never a warning:\n\n```bash\npipx install "misanthropic[app] @ '"${WHL_URL}"'"\nmisanthropic-app      # menu-bar app   (or:  misanthropic serve)\n```\n'
+  PIPX_BLOCK="$(cat <<EOF
+
+### Option B — no app, no Gatekeeper (pipx)
+
+A pip install is not a quarantined app, so there is never a warning:
+
+\`\`\`bash
+pipx install "misanthropic[app] @ ${WHL_URL}"
+misanthropic-app      # menu-bar app   (or:  misanthropic serve)
+\`\`\`
+EOF
+)"
 fi
 
 NOTES="$(cat <<EOF
