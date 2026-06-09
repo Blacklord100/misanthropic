@@ -1,8 +1,8 @@
 {
-  "version": "0.8.5",
-  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v0.8.5",
-  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v0.8.5/Misanthropic-0.8.5.dmg",
-  "sha256": "1d190f5c314957e68d7290b6d66e0bf1ec23e064660b94f6189b991d7f06f740",
-  "notes": "- **Single repo.** Source, releases, and the update feed now live in one public\n  repo (`Blacklord100/misanthropic`) instead of a separate `*-releases` repo. The\n  in-app updater polls `appcast.json` at the repo root; `publish-release.sh`\n  publishes the release (dmg + wheel + sdist), auto-stamps install instructions in\n  the release body, and commits the appcast \u2014 all in one place. No behavior change\n  to the app itself.",
+  "version": "1.0.0",
+  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.0.0",
+  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.0.0/Misanthropic-1.0.0.dmg",
+  "sha256": "da96d5ba6027099bab8c42b025db8ef36019044c779a8dfe232c2e99531bc63d",
+  "notes": "First stable release. The Anthropic Messages API, served from your own Claude Code\nlogin \u2014 no API key, no per-token bill. Everything that landed on the road to 1.0:\n\n- **Drop-in Messages API** over the local `claude` CLI: non-streaming + streaming\n  (SSE), `count_tokens`, all model tiers (full ids and `sonnet`/`opus`/`haiku`\n  aliases), image/vision input, and faithful error shapes.\n- **Per-request web search** driven by the `web_search` tool, with an `auto`/`on`/`off`\n  server policy \u2014 mirrors ",
   "min_macos": "11.0"
 }
