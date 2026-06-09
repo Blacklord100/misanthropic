@@ -36,7 +36,10 @@ DOWNLOAD_PAGE="https://github.com/${REPO}/releases/tag/${TAG}"
 DMG_URL="https://github.com/${REPO}/releases/download/${TAG}/${DMG_NAME}"
 WHL_URL="https://github.com/${REPO}/releases/download/${TAG}/$(basename "$WHL")"
 
-ASSETS=("$DMG")
+# A versionless copy so releases/latest/download/Misanthropic.dmg is a stable URL.
+STABLE_DMG="dist/Misanthropic.dmg"
+cp -f "$DMG" "$STABLE_DMG"
+ASSETS=("$DMG" "$STABLE_DMG")
 [ -f "$WHL" ] && ASSETS+=("$WHL")
 [ -f "$SDI" ] && ASSETS+=("$SDI")
 

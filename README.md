@@ -49,7 +49,47 @@ That's the whole bill. Nothing per-token, nothing extra to buy, nothing phoned h
 > the Claude desktop chat app. If `claude --version` works in your terminal, you're
 > already armed.
 
-## Install
+## Download the macOS app
+
+The easiest way to run it: a menu-bar app (skull icon) that supervises the server
+and gives you the dashboard.
+
+**[⬇ Download the latest `.dmg`](https://github.com/Blacklord100/misanthropic/releases/latest)** → open it → drag the skull onto **Applications**.
+
+### Fast install — one line, no warning
+
+Prefer the terminal? This downloads, installs, and opens it, skipping the macOS
+"can't be verified" prompt:
+
+```bash
+curl -fsSL https://github.com/Blacklord100/misanthropic/releases/latest/download/Misanthropic.dmg -o /tmp/m.dmg \
+  && hdiutil attach /tmp/m.dmg -nobrowse -quiet \
+  && cp -R "/Volumes/Misanthropic/Misanthropic.app" /Applications/ \
+  && hdiutil detach "/Volumes/Misanthropic" -quiet \
+  && xattr -dr com.apple.quarantine /Applications/Misanthropic.app \
+  && open /Applications/Misanthropic.app
+```
+
+> **Why the warning at all?** The app isn't *notarized* by Apple — that needs a
+> paid Apple Developer account ($99/yr) this project doesn't have. It is **not**
+> malware; macOS flags anything downloaded from outside the App Store. The
+> `xattr -dr com.apple.quarantine` line clears that download flag so it opens
+> normally. If you grabbed the `.dmg` by hand instead, first launch shows the
+> prompt → click **Done**, then **System Settings → Privacy & Security → Open
+> Anyway** (one time).
+
+### No app, no Gatekeeper (pipx)
+
+A pip install isn't a quarantined app, so there's never a warning:
+
+```bash
+pipx install "misanthropic[app] @ git+https://github.com/Blacklord100/misanthropic.git"
+misanthropic-app      # menu-bar app   (or:  misanthropic serve)
+```
+
+Every path needs the `claude` CLI installed and logged in.
+
+## Install (CLI / from source)
 
 ```bash
 pipx install git+https://github.com/Blacklord100/misanthropic.git
