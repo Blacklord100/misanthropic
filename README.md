@@ -73,6 +73,11 @@ Anyway** (one time, then it's normal).
 > macOS flags anything downloaded outside the App Store. The one-liner's
 > `xattr -dr com.apple.quarantine` just clears that download flag.
 
+> **App vs. command line.** The `.app` is the menu-bar GUI — it does **not** add a
+> `misanthropic` command to your terminal. For the CLI (`misanthropic serve`,
+> `misanthropic savings`, …) install via pipx or pip below. Both share the same
+> `~/.misanthropic` state, so the app and CLI always agree.
+
 ### 3 · No app, no Gatekeeper (pipx)
 
 A pip install isn't a quarantined bundle, so there's never a prompt — best for
