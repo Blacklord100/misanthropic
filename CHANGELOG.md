@@ -7,6 +7,19 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v0.8.3 — 2026-06-09
+- **Real app icon + drag-to-install `.dmg`.** The app finally has its own icon
+  (colored skull + clay Anthropic-asterisk, generated from code in
+  `packaging/icons/draw.py`) instead of the generic py2app rocket. `make_dmg.sh`
+  now produces a styled disk image — app icon on the left, an **Applications**
+  alias on the right with an arrow — so installing is one drag, like Chrome.
+- **One-command release flow.** `bash packaging/release.sh` builds the app and the
+  styled `.dmg`; `--publish` also cuts the GitHub release and refreshes the update
+  feed. `build.sh` now ad-hoc signs by default (so it runs on Apple Silicon) and
+  honors `SIGN_IDENTITY` for a Developer ID / notarizable build. DISTRIBUTION.md
+  rewritten with the honest signing story (ad-hoc = free but one-time Gatekeeper
+  allow; Developer ID + notarization = clean double-click).
+
 ## v0.8.2 — 2026-06-09
 - **"Money saved" counter.** The dashboard now shows a running total of what the
   hosted Anthropic API *would* have charged for every token you've run —

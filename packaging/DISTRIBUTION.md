@@ -7,64 +7,75 @@ Anthropic's terms, let other people hit *your* subscription over the network.)
 
 Each recipient needs: macOS 11+, the `claude` CLI installed and logged in.
 
-## 1. Build
+## TL;DR — generate / update a release
 
 ```bash
-bash packaging/build.sh
-# -> dist/Misanthropic.app
+bash packaging/release.sh            # build the app + styled .dmg  -> dist/Misanthropic-<version>.dmg
+bash packaging/release.sh --publish  # ...then cut the GitHub release + appcast
 ```
 
-## 2. Run locally (you, this Mac)
+To **update**: bump the version in `src/misanthropic/__init__.py`, re-run the
+command. Installed apps see the new `appcast.json` on their next check and prompt
+the user to download (see *Updates* in the README). The two steps run
+individually too:
 
 ```bash
-open dist/Misanthropic.app
+bash packaging/build.sh      # -> dist/Misanthropic.app   (icon + ad-hoc sign)
+bash packaging/make_dmg.sh   # -> dist/Misanthropic-<version>.dmg   (drag-to-install)
 ```
 
-Unsigned apps are fine for yourself. On first launch macOS Gatekeeper blocks it
-("Apple could not verify…"). On **macOS 15+ (Sequoia/Tahoe)** the old right-click
-→ Open trick no longer works: open **System Settings → Privacy & Security → Open
-Anyway**, or clear the quarantine flag from Terminal:
-`xattr -dr com.apple.quarantine /Applications/Misanthropic.app`. (On macOS ≤ Sonoma,
-right-click the app → **Open** → **Open** still works.)
+## The install experience
 
-## 3. Sign + notarize (required to share without scary warnings)
+`make_dmg.sh` produces a styled disk image: opening it shows the **Misanthropic**
+icon and an **Applications** alias with an arrow — the user drags one onto the
+other, exactly like Chrome/Slack/etc. The window background, icon positions, and
+the `/Applications` symlink are all baked into the `.dmg`.
 
-You need an Apple Developer account ($99/yr) and a "Developer ID Application"
-certificate.
+The app icon (colored skull + clay asterisk) is generated from code:
+`python packaging/icons/draw.py` re-renders the menu-bar template, the app
+`.iconset`, and the DMG backdrop; `build.sh` turns the iconset into
+`packaging/icons/appicon.icns` via `iconutil`. The generated assets are committed,
+so a normal build needs no Pillow.
+
+## Signing: the honest version
+
+There are two different things, and only the second gives the "double-click, it
+just opens" experience:
+
+| | What it does | Cost |
+|---|---|---|
+| **Ad-hoc signing** (default in `build.sh`) | Lets the app *run at all* on Apple Silicon and keeps it internally consistent. Does **not** remove Gatekeeper's "can't be verified" prompt on other Macs. | Free |
+| **Developer ID + notarization** | The app opens with a normal double-click on any Mac, no warning — like Chrome. | Apple Developer account, **$99/yr** |
+
+### Unsigned/ad-hoc (free) — recipients do a one-time allow
+
+First launch on someone else's Mac shows "Apple could not verify…". On **macOS
+15+** the right-click→Open trick is gone; they use **System Settings → Privacy &
+Security → Open Anyway**, or clear quarantine in Terminal:
+`xattr -dr com.apple.quarantine /Applications/Misanthropic.app`. (macOS ≤ Sonoma:
+right-click → **Open** → **Open**.) After that one allow, it launches normally.
+
+### Developer ID + notarization (clean experience)
 
 ```bash
-# a) Sign (hardened runtime is required for notarization)
-codesign --deep --force --options runtime \
-  --sign "Developer ID Application: YOUR NAME (TEAMID)" \
-  dist/Misanthropic.app
+# 1) Build signed with your Developer ID (hardened runtime, required for notarization)
+SIGN_IDENTITY="Developer ID Application: YOUR NAME (TEAMID)" bash packaging/build.sh
 
-# b) Zip and submit for notarization
+# 2) Notarize the app
 ditto -c -k --keepParent dist/Misanthropic.app Misanthropic.zip
 xcrun notarytool submit Misanthropic.zip \
   --apple-id "you@example.com" --team-id TEAMID \
   --password "app-specific-password" --wait
 
-# c) Staple the ticket so it works offline
+# 3) Staple the ticket so it verifies offline, then package
 xcrun stapler staple dist/Misanthropic.app
-```
-
-Then distribute the `.app` (or wrap it in a `.dmg` — see step 4). Notarized apps
-open with a normal double-click on any Mac.
-
-## 4. Wrap in a `.dmg` (recommended for sharing)
-
-```bash
 bash packaging/make_dmg.sh
-# -> dist/Misanthropic-<version>.dmg
 ```
 
-This produces a compressed UDZO disk image named with the bundle's
-`CFBundleShortVersionString`. Recipients open it, drag `Misanthropic.app` to
-`/Applications`, and launch from there. The `.dmg` is just a shipping wrapper —
-the signing/notarization above applies to the `.app` *inside* it. For a fully
-clean launch experience on other Macs, do step 3 *before* building the `.dmg`.
+Notarize the `.app` *before* `make_dmg.sh` — the staple lives in the bundle the
+`.dmg` wraps. (You can also notarize+staple the `.dmg` itself for belt-and-braces.)
 
-## 5. Python runtime note
+## Python runtime note
 
 py2app bundles a Python interpreter and the `misanthropic` package into the
 `.app`, so recipients do **not** need Python installed. They do still need the
@@ -75,4 +86,9 @@ py2app bundles a Python interpreter and the `misanthropic` package into the
 - **Architecture:** py2app builds for the machine you build on. For a universal
   app supporting both Apple Silicon and Intel, build on each and/or use a
   universal2 Python. Simplest: build on Apple Silicon, note it's arm64-only.
-- **Auto-update:** not included. For real distribution consider Sparkle.
+- **GUI for the styled layout:** `make_dmg.sh` positions icons via Finder
+  (AppleScript), which needs a logged-in GUI session. Over plain SSH/CI it falls
+  back to a plain (still drag-installable) image — run it from a desktop session
+  for the pretty layout.
+- **Auto-update:** notify-only today (the app points users at the new `.dmg`);
+  no silent in-place replace yet. For that, consider Sparkle.

@@ -13,6 +13,11 @@ from misanthropic import __version__
 
 APP = ["packaging/app_main.py"]
 
+# Colored skull app icon (Finder / Dock / DMG). Built from the iconset by
+# build.sh via `iconutil`; falls back gracefully if absent.
+import os
+_ICON = "packaging/icons/appicon.icns"
+
 OPTIONS = {
     "argv_emulation": False,
     "packages": ["misanthropic"],
@@ -28,6 +33,9 @@ OPTIONS = {
         "NSHumanReadableCopyright": "MIT",
     },
 }
+
+if os.path.exists(_ICON):
+    OPTIONS["iconfile"] = _ICON
 
 setup(
     app=APP,

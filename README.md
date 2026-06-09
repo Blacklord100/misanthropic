@@ -105,9 +105,16 @@ skull with an Anthropic-asterisk forehead mark — that supervises the server an
 hands you a dashboard.
 
 ```bash
-bash packaging/build.sh        # -> dist/Misanthropic.app
-open dist/Misanthropic.app
+bash packaging/release.sh      # -> dist/Misanthropic.app + dist/Misanthropic-<version>.dmg
+open dist/Misanthropic-*.dmg   # opens the installer window; drag the skull onto Applications
 ```
+
+The `.dmg` is a proper drag-to-install image (app icon + an **Applications** alias
+with an arrow — same as installing Chrome). `release.sh` builds the app, gives it
+the colored skull icon, and packages the styled disk image; `bash packaging/release.sh
+--publish` also cuts the GitHub release and refreshes the update feed. See
+[packaging/DISTRIBUTION.md](packaging/DISTRIBUTION.md) for signing/notarizing so it
+opens with no Gatekeeper warning on other Macs.
 
 It lurks in the menu bar (no Dock icon): start/stop the server, **force web
 search on** for every request (off by default — requests decide per call; see
