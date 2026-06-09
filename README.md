@@ -2,10 +2,13 @@
 
 # ☠ Misanthropic
 
-### The Anthropic Messages API, conjured out of your own Claude Code login.
+### Why pay for an API key when you already have a subscription?
 
 **Anthropic charges you per token. Misanthropic charges no one.**
-No API key. No per-token bill. No outbound call to anyone's server but your own machine.
+The Anthropic Messages API, conjured out of your own Claude Code login.
+No API key. No per-token bill. No call to anyone's server but your own.
+
+**For your personal usage only. Don't you dare stand this up as a shared server.**
 
 *v0.8.0 — see [CHANGELOG.md](CHANGELOG.md). Formerly known as Breakthrough.*
 
@@ -316,10 +319,11 @@ API:
 
 ## Security note
 
-By default the server binds to `127.0.0.1` (local only) and accepts any key. If you
-bind to `0.0.0.0` or otherwise expose it, set `MISANTHROPIC_API_KEY` so it isn't an
-open relay to your Claude account. Don't point other people's machines at *your*
-server — ship them the tool and let each one use their own Claude login.
+**For your personal usage only. Don't you dare stand this up as a shared server.**
+By default it binds to `127.0.0.1` (local only) and accepts any key. Bind to
+`0.0.0.0` or expose it and you've turned your own Claude account into an open relay —
+that's how subscriptions get banned. Ship other people the tool and let each one use
+their own login; never point their machines at yours.
 
 ## License
 
