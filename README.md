@@ -109,9 +109,10 @@ bash packaging/build.sh        # -> dist/Misanthropic.app
 open dist/Misanthropic.app
 ```
 
-It lurks in the menu bar (no Dock icon): start/stop the server, toggle **web
-search** on/off (takes effect on the next request — see below), open the dashboard,
-copy the base URL, and toggle "start at login". The dashboard (also at
+It lurks in the menu bar (no Dock icon): start/stop the server, **force web
+search on** for every request (off by default — requests decide per call; see
+below), open the dashboard, copy the base URL, and toggle "start at login". The
+dashboard (also at
 `http://127.0.0.1:8787/` whenever the server runs) lets you:
 
 - mint per-project API keys (shaped `sk-ant-local-…` so they drop straight into any
@@ -234,20 +235,46 @@ Environment variables:
   `~/.misanthropic`.
 - `MISANTHROPIC_APPCAST_URL` — override the update-check manifest URL (the menu-bar
   app's "check for updates" feed). Defaults to the public release feed.
-- `MISANTHROPIC_WEB` — set to `1` to enable web search (see below). Off by default.
+- `MISANTHROPIC_WEB` — web-search policy (see below). `auto` (default) decides
+  per request from the `web_search` tool, like the hosted API; `1`/`on` forces it
+  on for every request; `off` is a hard kill-switch (no internet, ever).
 - `MISANTHROPIC_WEB_MAX_TURNS` — agentic turn cap when web is on. Defaults `16`.
 - `MISANTHROPIC_WEB_TIMEOUT_MS` — watchdog timeout for a web run (the loop can
   legitimately take >120s, so this defaults to `600000` = 10 min; runaway runs are
   killed instead of hanging).
 
-## Web search (opt-in)
+## Web search (per-request, like the hosted API)
 
 By default the proxy has no internet access — exactly like the bare Messages API.
-Set `MISANTHROPIC_WEB=1` and the server arms the CLI's `WebSearch` tool, then
-remaps the result into the **API's own `web_search` content shape**:
+Web search is **decided per request, from the `web_search` tool in the request
+body**, the same way `api.anthropic.com` does it. Include the tool on a call and
+that call searches the web; leave it off and it doesn't. Nothing global to flip:
+
+```python
+client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    tools=[{"type": "web_search_20260209", "name": "web_search"}],   # this call searches
+    messages=[{"role": "user", "content": "What shipped in Python 3.13?"}],
+)
+```
+
+The server-wide `MISANTHROPIC_WEB` policy layers on top:
+
+- `auto` *(default)* — honor each request's `web_search` tool. Drop-in faithful.
+- `on` (`MISANTHROPIC_WEB=1`) — force web for **every** request, even ones that
+  don't ask. Handy for clients that can't set `tools`.
+- `off` (`MISANTHROPIC_WEB=off`) — hard kill-switch: deny internet regardless of
+  the request. The "this server can never reach the web" guarantee.
+
+The menu-bar app's **Force web search on** toggle flips between `auto` and `on`
+live (takes effect on the next request). When web runs for a request, the server
+arms the CLI's `WebSearch` tool and remaps the result into the **API's own
+`web_search` content shape**:
 
 ```bash
-MISANTHROPIC_WEB=1 misanthropic serve
+misanthropic serve                  # auto: per-request
+MISANTHROPIC_WEB=1 misanthropic serve   # force on for everything
 ```
 
 Responses then carry `server_tool_use` (name `web_search`),
@@ -291,11 +318,12 @@ prompt to `claude --input-format stream-json` — the only CLI path that accepts
 content — feeding one Anthropic-shaped user message (the rendered text plus the image
 blocks). This works in stateless, session, streaming, and web modes.
 
-With `MISANTHROPIC_WEB=1` the invocation changes to `--tools WebSearch
---allowedTools WebSearch --max-turns 16` and always runs `stream-json` (even for
-non-streaming requests, since the plain JSON wrapper collapses the agentic loop into
-one string and hides the tool blocks). The CLI's `WebSearch` tool_use/tool_result
-events are then remapped into the API's `web_search` content blocks.
+When a request runs with web on (it included the `web_search` tool, or the policy
+forces it), the invocation changes to `--tools WebSearch --allowedTools WebSearch
+--max-turns 16` and always runs `stream-json` (even for non-streaming requests,
+since the plain JSON wrapper collapses the agentic loop into one string and hides
+the tool blocks). The CLI's `WebSearch` tool_use/tool_result events are then
+remapped into the API's `web_search` content blocks.
 
 ## Limitations
 

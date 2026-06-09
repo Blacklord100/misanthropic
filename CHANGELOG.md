@@ -7,6 +7,19 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v0.8.1 — 2026-06-09
+- **Web search is now per-request, like the hosted API.** Previously web search
+  was a single global server flag (`MISANTHROPIC_WEB=1`) that ignored the request
+  body — un-faithful to the Messages API, where web search is a per-call tool. Now
+  the server honors the `web_search` tool in each request's `tools` array, so real
+  SDK code "just works": the same request that enables web search against
+  `api.anthropic.com` enables it here.
+- **`MISANTHROPIC_WEB` is now a policy, not a boolean.** `auto` (default) honors
+  the per-request tool; `1`/`on` forces web on for every request (the old
+  behavior — preserved as an alias); `off` is a new hard kill-switch that denies
+  internet regardless of the request. The menu-bar item is now **Force web search
+  on**, flipping between `auto` and `on` live.
+
 ## v0.8.0 — 2026-06-09
 - **Rebrand: Breakthrough → Misanthropic.** Anthropic charges you; Misanthropic
   charges no one. Everything is renamed: the `misanthropic` command (and

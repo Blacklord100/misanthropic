@@ -98,8 +98,11 @@ def main():
             self.httpd = None
             self.thread = None
             self.toggle_item = rumps.MenuItem("Stop server", callback=self.toggle)
-            self.web_item = rumps.MenuItem("Web search (internet)", callback=self.toggle_web)
-            self.web_item.state = claude.web_enabled()
+            # Checked = force web on for every request; unchecked = "auto", where
+            # each request decides for itself via the web_search tool (faithful to
+            # the hosted API). The hard "off" kill-switch is env-only.
+            self.web_item = rumps.MenuItem("Force web search on", callback=self.toggle_web)
+            self.web_item.state = (claude.web_policy() == "on")
             self.login_item = rumps.MenuItem("Start at login", callback=self.toggle_login)
             self.login_item.state = LAUNCH_AGENT.exists()
             # Update checking: the item retitles to "Download vX…" when a newer
@@ -161,13 +164,14 @@ def main():
 
         # ---- menu actions ----
         def toggle_web(self, sender):
-            new = not bool(sender.state)
-            claude.set_web_enabled(new)
-            sender.state = new
+            force_on = not bool(sender.state)
+            claude.set_web_policy("on" if force_on else "auto")
+            sender.state = force_on
             rumps.notification(
                 "Misanthropic",
-                "Web search " + ("enabled" if new else "disabled"),
-                "New requests can search the web." if new else "Back to text-only (bare API).",
+                "Web search forced " + ("on" if force_on else "off (auto)"),
+                "Every new request can search the web." if force_on
+                else "Per request: only calls that include the web_search tool search the web.",
             )
 
         def open_dashboard(self, _):

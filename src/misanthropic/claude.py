@@ -24,16 +24,12 @@ import threading
 # internal memory Read). Removing tools makes it a clean completion endpoint.
 NO_TOOLS = ""
 
-# Opt-in web access. OFF by default so the proxy stays a faithful bare-Messages
-# endpoint (the hosted API also has no internet unless you pass the web_search
-# server tool). When on, we expose only WebSearch — a clean 1:1 analog to the
-# API's `web_search` tool — and raise the turn cap so the agentic loop (search,
-# then answer) can complete instead of aborting at `--max-turns 1`. `WebSearch`
-# must also be in --allowedTools, else it is permission-denied in print mode.
-#
-# The state is mutable (not a frozen constant) so the menu-bar app can toggle it
-# at runtime; MISANTHROPIC_WEB only sets the initial value. The server reads it
-# per request via web_enabled(), so a flip takes effect on the next request.
+# Web access. When a request runs with web on we expose only WebSearch — a clean
+# 1:1 analog to the API's `web_search` tool — and raise the turn cap so the
+# agentic loop (search, then answer) can complete instead of aborting at
+# `--max-turns 1`. `WebSearch` must also be in --allowedTools, else it is
+# permission-denied in print mode. Whether a given request runs with web on is
+# decided per request — see the web policy below.
 WEB_TOOLS = "WebSearch"
 
 
@@ -53,17 +49,59 @@ WEB_MAX_TURNS = str(_positive_int_env("MISANTHROPIC_WEB_MAX_TURNS", 16))
 # it overruns instead of letting the request hang forever.
 WEB_TIMEOUT_S = float(os.environ.get("MISANTHROPIC_WEB_TIMEOUT_MS", "600000")) / 1000.0
 
-_web_enabled = os.environ.get("MISANTHROPIC_WEB", "").strip().lower() in ("1", "true", "yes", "on")
+# Web access is a per-request decision, governed by a server-wide *policy*:
+#
+#   "auto" (default) — honor the request: web runs only for calls that include
+#                      the API's web_search tool, exactly like the hosted
+#                      Messages API. The faithful, drop-in behavior.
+#   "on"             — force web for every request (handy for clients that can't
+#                      set tools). This is what MISANTHROPIC_WEB=1 selects.
+#   "off"            — hard kill-switch: deny internet regardless of the request.
+#
+# The policy is mutable so the menu-bar app can flip it at runtime; the server
+# resolves it per request via resolve_web(), so a change takes effect on the next
+# request. MISANTHROPIC_WEB only sets the initial policy.
+_WEB_POLICIES = ("auto", "on", "off")
 
 
-def web_enabled():
-    return _web_enabled
+def _initial_web_policy():
+    raw = os.environ.get("MISANTHROPIC_WEB", "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return "on"
+    if raw in ("0", "false", "no", "off"):
+        return "off"
+    if raw in _WEB_POLICIES:
+        return raw
+    return "auto"
 
 
-def set_web_enabled(value):
-    global _web_enabled
-    _web_enabled = bool(value)
-    return _web_enabled
+_web_policy = _initial_web_policy()
+
+
+def web_policy():
+    return _web_policy
+
+
+def set_web_policy(value):
+    global _web_policy
+    if value not in _WEB_POLICIES:
+        raise ValueError(f"web policy must be one of {_WEB_POLICIES}")
+    _web_policy = value
+    return _web_policy
+
+
+def resolve_web(requested):
+    """Decide whether THIS request runs with web search.
+
+    `requested` is whether the client asked for web search (the web_search tool
+    was present in the request's `tools`). Policy "on" forces web, "off" denies
+    it, and "auto" honors the request — the hosted-API-identical default.
+    """
+    if _web_policy == "on":
+        return True
+    if _web_policy == "off":
+        return False
+    return bool(requested)
 
 # Claude Code's default `-p` system prompt is the full agentic prompt (memory,
 # tools, the user's env/identity). We always override it so the proxy behaves

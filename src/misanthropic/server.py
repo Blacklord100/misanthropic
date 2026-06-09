@@ -28,10 +28,25 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__, dashboard, request_log, sessions, translate
-from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, run_web, stream_events, web_enabled
+from .claude import ClaudeError, DEFAULT_MODEL, resolve_web, run_blocking, run_web, stream_events, web_policy
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
 API_KEY = os.environ.get("MISANTHROPIC_API_KEY")
+
+
+def _request_wants_web(body):
+    """True if the client's request asked for web search — i.e. the API's
+    web_search server tool appears in `tools`. This is the signal the "auto" web
+    policy honors, mirroring the hosted Messages API where web search is a
+    per-request tool, not a server-wide setting. Matches every web_search tool
+    version (e.g. web_search_20260209, web_search_20250305)."""
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return False
+    return any(
+        isinstance(t, dict) and str(t.get("type", "")).startswith("web_search")
+        for t in tools
+    )
 
 # The activity log keeps the full prompt/response text so the dashboard can show
 # it in full when a row is expanded. This cap is only a runaway guard for a
@@ -81,13 +96,12 @@ class Handler(BaseHTTPRequestHandler):
         meta = (sessions.keys_detail() or {}).get(key) or {}
         return meta.get("label") or "(unnamed)"
 
-    def _request_mode(self, linked):
-        w = web_enabled()
-        if linked and w:
+    def _request_mode(self, linked, web):
+        if linked and web:
             return "session+web"
         if linked:
             return "session"
-        if w:
+        if web:
             return "web"
         return "stateless"
 
@@ -110,12 +124,12 @@ class Handler(BaseHTTPRequestHandler):
             return "\n".join(p for p in parts if p)[:MAX_LOG_TEXT]
         return ""
 
-    def _log_start(self, body, key, linked):
+    def _log_start(self, body, key, linked, web):
         self._log_rec = {
             "ts": time.time(),
             "key_label": self._key_label(key) if linked else "stateless",
             "model": body.get("model") or DEFAULT_MODEL,
-            "mode": self._request_mode(linked),
+            "mode": self._request_mode(linked, web),
             "stream": bool(body.get("stream")),
             "prompt_text": self._last_user_text(body),
         }
@@ -263,14 +277,17 @@ class Handler(BaseHTTPRequestHandler):
         input_format, prompt = translate.build_cli_input(messages)
         linked = sessions.session_mode_enabled()  # key-linked session?
 
+        # Decide web per request: the "auto" policy honors the web_search tool in
+        # the request (faithful to the hosted API); "on"/"off" force/deny it.
+        use_web = resolve_web(_request_wants_web(body))
+
         # Start a request-log entry; finalized in _send_json or the streaming
         # paths' end-of-emit hooks. Visible at GET /admin/requests.
-        self._log_start(body, key, linked)
+        self._log_start(body, key, linked, use_web)
 
         # Web mode runs the agentic loop and reshapes its tool blocks into the
         # API's `web_search` content. Both stream and non-stream go through it.
-        # Checked per request so the menu-bar app's toggle takes effect live.
-        if web_enabled():
+        if use_web:
             if body.get("stream"):
                 return self._stream_web(prompt, model, system, key if linked else None, input_format)
             return self._blocking_web(prompt, model, system, key if linked else None, input_format)
@@ -498,7 +515,12 @@ def serve(host="127.0.0.1", port=8787):
               f"sessions persist & resume per key", file=sys.stderr)
     else:
         print(f"  mode: stateless  ·  auth: {'x-api-key required' if API_KEY else 'open (local)'}", file=sys.stderr)
-    print(f"  web search: {'on (MISANTHROPIC_WEB)' if web_enabled() else 'off — set MISANTHROPIC_WEB=1'}", file=sys.stderr)
+    _web_desc = {
+        "auto": "auto — per request, honors the web_search tool (like the hosted API)",
+        "on": "on — forced for every request (MISANTHROPIC_WEB=1)",
+        "off": "off — hard kill-switch, no internet (MISANTHROPIC_WEB=off)",
+    }[web_policy()]
+    print(f"  web search: {_web_desc}", file=sys.stderr)
     print(f"  point your client at  base_url={base}", file=sys.stderr)
     try:
         httpd.serve_forever()
