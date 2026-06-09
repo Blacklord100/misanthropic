@@ -1,8 +1,8 @@
 {
-  "version": "1.0.0",
-  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.0.0",
-  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.0.0/Misanthropic-1.0.0.dmg",
-  "sha256": "da96d5ba6027099bab8c42b025db8ef36019044c779a8dfe232c2e99531bc63d",
-  "notes": "First stable release. The Anthropic Messages API, served from your own Claude Code\nlogin \u2014 no API key, no per-token bill. Everything that landed on the road to 1.0:\n\n- **Drop-in Messages API** over the local `claude` CLI: non-streaming + streaming\n  (SSE), `count_tokens`, all model tiers (full ids and `sonnet`/`opus`/`haiku`\n  aliases), image/vision input, and faithful error shapes.\n- **Per-request web search** driven by the `web_search` tool, with an `auto`/`on`/`off`\n  server policy \u2014 mirrors ",
+  "version": "1.0.1",
+  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.0.1",
+  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.0.1/Misanthropic-1.0.1.dmg",
+  "sha256": "82bef8b0077b2edb8786491b2093fba75868de1481d16e3d7f463b0d4401f8c3",
+  "notes": "- **Fix: the savings counter now counts auto-cached prompt tokens.** Claude Code\n  automatically prompt-caches large requests, so most prompt tokens were reported\n  under `cache_creation_input_tokens` / `cache_read_input_tokens` rather than\n  `input_tokens` \u2014 and the savings math ignored them, badly undercounting big\n  requests. It now counts every prompt token (input + cache write + cache read) at\n  the input rate, i.e. what a hosted-API user *without* caching would pay. The\n  activity log's \"i",
   "min_macos": "11.0"
 }
