@@ -45,23 +45,10 @@ CHANGE="$(awk -v tag="## ${TAG}" 'index($0,tag)==1{f=1;next} /^## v/{if(f)exit} 
 
 ONELINER="curl -fsSL ${DMG_URL} -o /tmp/m.dmg && hdiutil attach /tmp/m.dmg -nobrowse -quiet && cp -R \"/Volumes/Misanthropic/Misanthropic.app\" /Applications/ && hdiutil detach \"/Volumes/Misanthropic\" -quiet && xattr -dr com.apple.quarantine /Applications/Misanthropic.app && open /Applications/Misanthropic.app"
 
-PIPX_BLOCK=""
-if [ -f "$WHL" ]; then
-  PIPX_BLOCK="$(cat <<EOF
-
-### Option B — no app, no Gatekeeper (pipx)
-
-A pip install is not a quarantined app, so there is never a warning:
-
-\`\`\`bash
-pipx install "misanthropic[app] @ ${WHL_URL}"
-misanthropic-app      # menu-bar app   (or:  misanthropic serve)
-\`\`\`
-EOF
-)"
-fi
-
-NOTES="$(cat <<EOF
+# Build the release body in a file (top-level heredocs — avoids quoting traps).
+NOTES_FILE="$(mktemp)"
+trap 'rm -f "$NOTES_FILE"' EXIT
+cat > "$NOTES_FILE" <<EOF
 ## Install
 
 **Requirements:** macOS 11+, and the [\`claude\`](https://docs.claude.com/en/docs/claude-code) CLI installed and logged in (the app uses *your own* Claude login).
@@ -74,17 +61,33 @@ Paste this into **Terminal**. It downloads the app, installs it, and opens it �
 ${ONELINER}
 \`\`\`
 
-> **Why a warning?** The app isn't *notarized* by Apple (that needs a paid \$99/yr Developer account). It's **not** malware — macOS flags anything downloaded outside the App Store. The \`xattr -dr com.apple.quarantine\` part clears that flag so it opens normally.
+> **Why a warning?** The app is not *notarized* by Apple (that needs a paid \$99/yr Developer account). It is **not** malware — macOS flags anything downloaded outside the App Store. The \`xattr -dr com.apple.quarantine\` part clears that flag so it opens normally.
 
 ### Option A — download the .dmg by hand
 
-Download **${DMG_NAME}** below → open it → drag the skull onto **Applications**. First launch: macOS says *"Apple could not verify…"* → **System Settings → Privacy & Security → Open Anyway**. One time, then it's normal.
-${PIPX_BLOCK}
+Download **${DMG_NAME}** below, open it, and drag the skull onto **Applications**. First launch: macOS says *"Apple could not verify…"* → **System Settings → Privacy & Security → Open Anyway**. One time, then it opens normally.
+EOF
+
+if [ -f "$WHL" ]; then
+cat >> "$NOTES_FILE" <<EOF
+
+### Option B — no app, no Gatekeeper (pipx)
+
+A pip install is not a quarantined app, so there is never a warning:
+
+\`\`\`bash
+pipx install "misanthropic[app] @ ${WHL_URL}"
+misanthropic-app      # menu-bar app   (or:  misanthropic serve)
+\`\`\`
+EOF
+fi
+
+cat >> "$NOTES_FILE" <<EOF
+
 ---
 
 ${CHANGE}
 EOF
-)"
 
 echo "==> Publishing $TAG to: $REPO"
 echo "    assets: ${ASSETS[*]}"
@@ -92,10 +95,10 @@ echo "    sha256: $SHA256"
 
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   gh release upload "$TAG" "${ASSETS[@]}" --repo "$REPO" --clobber
-  gh release edit "$TAG" --repo "$REPO" --notes "$NOTES"
+  gh release edit "$TAG" --repo "$REPO" --notes-file "$NOTES_FILE"
 else
   gh release create "$TAG" "${ASSETS[@]}" --repo "$REPO" \
-    --title "Misanthropic ${VERSION}" --notes "$NOTES"
+    --title "Misanthropic ${VERSION}" --notes-file "$NOTES_FILE"
 fi
 
 # Write/refresh appcast.json at the repo root (this working tree IS the repo).
