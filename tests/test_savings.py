@@ -29,6 +29,12 @@ def test_summary_empty_when_nothing_recorded():
     assert s["since"] is None
 
 
+def test_sub_cent_precision_survives():
+    # One small haiku call: 164*$1/1M + 202*$5/1M = $0.001174 -> must not round to $0.
+    savings.record("haiku", 164, 202)
+    assert savings.summary()["all_time_usd"] == 0.0012
+
+
 def test_persists_across_reload():
     savings.record("haiku", 1_000_000, 1_000_000)  # $1 + $5 = $6
     # A fresh summary() re-reads the file from disk — simulates a restart.

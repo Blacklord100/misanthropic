@@ -82,8 +82,8 @@ def summary():
     all_time = state.get("all_time", _bucket())
     this_month = state.get("months", {}).get(month, _bucket())
     return {
-        "all_time_usd": round(all_time.get("usd", 0.0), 2),
-        "month_usd": round(this_month.get("usd", 0.0), 2),
+        "all_time_usd": round(all_time.get("usd", 0.0), 4),
+        "month_usd": round(this_month.get("usd", 0.0), 4),
         "month": month,
         "all_time_requests": all_time.get("requests", 0),
         "month_requests": this_month.get("requests", 0),

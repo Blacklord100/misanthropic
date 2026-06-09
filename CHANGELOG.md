@@ -7,6 +7,14 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v0.8.4 — 2026-06-09
+- **Savings banner is always visible, and counts sub-cent usage.** It previously
+  stayed hidden until the running total crossed a rounded cent — so after a fresh
+  install (or a couple of small calls) it looked missing. Now the dashboard shows
+  the banner as soon as the server is up (with an inviting empty state before the
+  first request), and small totals display with sub-cent precision (e.g. `$0.0012`)
+  instead of rounding to `$0.00`. `misanthropic savings` does the same.
+
 ## v0.8.3 — 2026-06-09
 - **Real app icon + drag-to-install `.dmg`.** The app finally has its own icon
   (colored skull + clay Anthropic-asterisk, generated from code in

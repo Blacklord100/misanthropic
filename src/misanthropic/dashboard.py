@@ -168,12 +168,23 @@ function renderRequests(reqs){
   wrap.innerHTML = `<table class="reqs"><thead><tr><th>time</th><th>key</th><th>model</th><th>mode</th><th>tokens</th><th>dur</th><th>status</th></tr></thead><tbody>${rows}</tbody></table>`;
   restore();
 }
-function money(n){ return "$"+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function money(n){
+  n = Number(n)||0;
+  const d = (n>0 && n<0.01) ? 4 : 2;   // sub-cent precision for tiny totals
+  return "$"+n.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+}
 function renderSavings(s){
   const el = $("#savings");
-  if(!s || (!s.all_time_usd && !s.all_time_requests)){ el.hidden = true; return; }
-  el.hidden = false;
+  if(!s){ el.hidden = true; return; }
+  el.hidden = false;                    // always visible once the server is up
   const n = s.all_time_requests||0;
+  if(!n){
+    el.innerHTML =
+      `<div class="save-big">☠ Your dodged-API-bill counter</div>`+
+      `<div class="save-sub">Run a request through the proxy and watch what you'd have `+
+      `paid on the hosted API rack up here.</div>`;
+    return;
+  }
   const since = s.since ? new Date(s.since).toLocaleDateString() : null;
   el.innerHTML =
     `<div class="save-big">☠ You'd have paid <b>${money(s.all_time_usd)}</b> on the API.</div>`+

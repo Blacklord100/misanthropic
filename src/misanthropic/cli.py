@@ -57,11 +57,16 @@ def _cmd_sessions(args):
     return 0
 
 
+def _money(n):
+    n = float(n or 0)
+    return f"${n:,.4f}" if 0 < n < 0.01 else f"${n:,.2f}"
+
+
 def _cmd_savings():
     s = savings.summary()
-    print(f"You'd have paid ${s['all_time_usd']:,.2f} on the hosted API.")
+    print(f"You'd have paid {_money(s['all_time_usd'])} on the hosted API.")
     print(f"Misanthropic charged you $0.00.")
-    print(f"  this month: ${s['month_usd']:,.2f} ({s['month']})")
+    print(f"  this month: {_money(s['month_usd'])} ({s['month']})")
     print(f"  requests:   {s['all_time_requests']:,}  ·  "
           f"tokens: {s['input_tokens']:,} in / {s['output_tokens']:,} out")
     if s.get("since"):
