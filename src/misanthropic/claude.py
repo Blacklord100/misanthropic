@@ -32,7 +32,7 @@ NO_TOOLS = ""
 # must also be in --allowedTools, else it is permission-denied in print mode.
 #
 # The state is mutable (not a frozen constant) so the menu-bar app can toggle it
-# at runtime; BREAKTHROUGH_WEB only sets the initial value. The server reads it
+# at runtime; MISANTHROPIC_WEB only sets the initial value. The server reads it
 # per request via web_enabled(), so a flip takes effect on the next request.
 WEB_TOOLS = "WebSearch"
 
@@ -46,14 +46,14 @@ def _positive_int_env(name, default):
         return default
 
 
-WEB_MAX_TURNS = str(_positive_int_env("BREAKTHROUGH_WEB_MAX_TURNS", 16))
+WEB_MAX_TURNS = str(_positive_int_env("MISANTHROPIC_WEB_MAX_TURNS", 16))
 # The agentic web loop legitimately takes longer than GEN_TIMEOUT_S (~120s):
 # multiple search turns + the final answer can run ~1-2 min in normal use, so
 # default to 10 min and let it be overridden. The watchdog kills the process if
 # it overruns instead of letting the request hang forever.
-WEB_TIMEOUT_S = float(os.environ.get("BREAKTHROUGH_WEB_TIMEOUT_MS", "600000")) / 1000.0
+WEB_TIMEOUT_S = float(os.environ.get("MISANTHROPIC_WEB_TIMEOUT_MS", "600000")) / 1000.0
 
-_web_enabled = os.environ.get("BREAKTHROUGH_WEB", "").strip().lower() in ("1", "true", "yes", "on")
+_web_enabled = os.environ.get("MISANTHROPIC_WEB", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def web_enabled():
@@ -71,7 +71,7 @@ def set_web_enabled(value):
 # no system prompt of its own (an empty override still leaks env context).
 DEFAULT_SYSTEM = "You are a helpful AI assistant."
 
-DEFAULT_MODEL = os.environ.get("BREAKTHROUGH_MODEL", os.environ.get("MODEL", "sonnet"))
+DEFAULT_MODEL = os.environ.get("MISANTHROPIC_MODEL", os.environ.get("MODEL", "sonnet"))
 # Explicit override (if the user set it). When unset we *discover* claude — see
 # claude_bin() — because a .app launched from Finder/login gets a minimal PATH
 # (/usr/bin:/bin:...) that omits Homebrew (/opt/homebrew/bin), ~/.local/bin, npm

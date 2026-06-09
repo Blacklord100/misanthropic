@@ -7,8 +7,8 @@ color (so it works in light and dark mode automatically).
     python packaging/icons/draw.py
 
 writes:
-    src/breakthrough/resources/menubar.png       (44x44, @1x)
-    src/breakthrough/resources/menubar@2x.png    (88x88, @2x retina)
+    src/misanthropic/resources/menubar.png       (44x44, @1x)
+    src/misanthropic/resources/menubar@2x.png    (88x88, @2x retina)
     packaging/icons/preview.png                  (256x256, for docs)
 
 Requires Pillow:  pip install Pillow
@@ -19,7 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 REPO = Path(__file__).resolve().parents[2]
-RUNTIME_DIR = REPO / "src" / "breakthrough" / "resources"
+RUNTIME_DIR = REPO / "src" / "misanthropic" / "resources"
 PREVIEW = REPO / "packaging" / "icons" / "preview.png"
 
 # Draw at @8x for crispness, then downsample to the target sizes.

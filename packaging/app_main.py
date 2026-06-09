@@ -1,4 +1,4 @@
-"""py2app entry point — launches the Breakthrough menu-bar app."""
-from breakthrough.app import main
+"""py2app entry point — launches the Misanthropic menu-bar app."""
+from misanthropic.app import main
 
 main()

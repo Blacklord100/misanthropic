@@ -10,7 +10,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Breakthrough</title>
+<title>Misanthropic</title>
 <style>
   :root { --bg:#0f1115; --card:#171a21; --line:#262b36; --fg:#e6e9ef; --dim:#8b93a7; --acc:#7c9cff; --ok:#3fb950; }
   * { box-sizing:border-box; }
@@ -61,7 +61,7 @@ PAGE = r"""<!doctype html>
 <body>
 <header>
   <span class="dot"></span>
-  <h1>Breakthrough</h1>
+  <h1>Misanthropic</h1>
   <span class="meta" id="meta">…</span>
 </header>
 <main>

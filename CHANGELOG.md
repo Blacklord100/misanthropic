@@ -1,8 +1,24 @@
 # Changelog
 
-All notable changes to Breakthrough are recorded here, newest first. Versions are
-tagged in git and published as [GitHub releases](https://github.com/Blacklord100/breakthrough-cli/releases)
+All notable changes to Misanthropic are recorded here, newest first. Versions are
+tagged in git and published as [GitHub releases](https://github.com/Blacklord100/misanthropic/releases)
 with the `.dmg`, `.whl`, and `.tar.gz` attached.
+
+> **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
+> Same trick, sharper name.
+
+## v0.8.0 — 2026-06-09
+- **Rebrand: Breakthrough → Misanthropic.** Anthropic charges you; Misanthropic
+  charges no one. Everything is renamed: the `misanthropic` command (and
+  `misanthropic-app`), the `misanthropic` package, the `MISANTHROPIC_*` environment
+  variables, the `~/.misanthropic` state directory, `Misanthropic.app`, and the
+  GitHub repo. No behavior changed — it's the same Anthropic-compatible proxy over
+  your local Claude Code login, with bolder docs.
+- **Migrating from Breakthrough:** re-point your clients' base URL (unchanged:
+  `http://127.0.0.1:8787`), swap `BREAKTHROUGH_*` env vars for `MISANTHROPIC_*`, and
+  move any state from `~/.breakthrough` to `~/.misanthropic` (or set
+  `MISANTHROPIC_HOME=~/.breakthrough` to keep using the old directory). Reinstall the
+  package/app under the new name.
 
 ## v0.7.2 — 2026-06-06
 - **Fix: "`claude` CLI not found on PATH" when the app is launched from Finder or
@@ -60,7 +76,7 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 - Security/robustness audit fixes (HIGH/MED/LOW).
 
 ## v0.5.0 — 2026-05-29
-- Opt-in web search (`BREAKTHROUGH_WEB=1`), remapped into the API's `web_search`
+- Opt-in web search (`MISANTHROPIC_WEB=1`), remapped into the API's `web_search`
   content shape.
 - macOS menu-bar app: supervises the server, toggles web search, opens the
   dashboard, manages per-project keys.

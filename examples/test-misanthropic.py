@@ -1,13 +1,13 @@
-"""End-to-end smoke test for a running Breakthrough server.
+"""End-to-end smoke test for a running Misanthropic server.
 
 Setup:
 
     python3 -m venv .venv
     .venv/bin/pip install anthropic
-    .venv/bin/python examples/test-breakthrough.py
+    .venv/bin/python examples/test-misanthropic.py
 
 Prereqs:
-    - Breakthrough.app is running (or `breakthrough serve`) on 127.0.0.1:8787.
+    - Misanthropic.app is running (or `misanthropic serve`) on 127.0.0.1:8787.
     - At least one approved key. Create one from the dashboard at
       http://127.0.0.1:8787, copy it, and either:
         * export ANTHROPIC_API_KEY=sk-ant-local-...    (recommended)
@@ -31,12 +31,12 @@ from anthropic import Anthropic
 
 BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY") or "sk-ant-local-REPLACE-ME"
-MODEL = os.environ.get("BREAKTHROUGH_TEST_MODEL", "claude-sonnet-4-6")
+MODEL = os.environ.get("MISANTHROPIC_TEST_MODEL", "claude-sonnet-4-6")
 
 if "REPLACE-ME" in API_KEY:
     raise SystemExit(
-        "Set ANTHROPIC_API_KEY to a key from the Breakthrough dashboard "
-        "(http://127.0.0.1:8787) or edit examples/test-breakthrough.py."
+        "Set ANTHROPIC_API_KEY to a key from the Misanthropic dashboard "
+        "(http://127.0.0.1:8787) or edit examples/test-misanthropic.py."
     )
 
 client = Anthropic(base_url=BASE_URL, api_key=API_KEY)

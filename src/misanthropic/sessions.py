@@ -5,8 +5,8 @@ The first request under a key starts a persistent claude session; later requests
 under the same key `--resume` it, so the whole chat accumulates in one session
 that's visible and resumable in the Claude Code CLI / desktop app.
 
-State lives under ~/.breakthrough (override with BREAKTHROUGH_HOME):
-  keys.json      list of approved keys (managed via `breakthrough keys ...`)
+State lives under ~/.misanthropic (override with MISANTHROPIC_HOME):
+  keys.json      list of approved keys (managed via `misanthropic keys ...`)
   sessions.json  { "<key>": {"session_id", "turns", "updated"} }
   workspace/     a stable cwd so `claude --resume` (project-scoped) resolves
 """
@@ -18,7 +18,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-CONFIG_DIR = Path(os.environ.get("BREAKTHROUGH_HOME", Path.home() / ".breakthrough"))
+CONFIG_DIR = Path(os.environ.get("MISANTHROPIC_HOME", Path.home() / ".misanthropic"))
 KEYS_FILE = CONFIG_DIR / "keys.json"
 SESSIONS_FILE = CONFIG_DIR / "sessions.json"
 WORKSPACE = CONFIG_DIR / "workspace"
@@ -66,9 +66,9 @@ def _read_keys():
 
 
 def approved_keys():
-    """The set of approved keys, from BREAKTHROUGH_KEYS env and keys.json."""
+    """The set of approved keys, from MISANTHROPIC_KEYS env and keys.json."""
     keys = set(_read_keys().keys())
-    env = os.environ.get("BREAKTHROUGH_KEYS")
+    env = os.environ.get("MISANTHROPIC_KEYS")
     if env:
         keys |= {k.strip() for k in env.split(",") if k.strip()}
     return keys

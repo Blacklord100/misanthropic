@@ -1,4 +1,4 @@
-"""Check a public appcast for a newer Breakthrough release.
+"""Check a public appcast for a newer Misanthropic release.
 
 The menu-bar app polls this so people who installed the `.dmg` learn when a newer
 build ships. v1 only *notifies* (and opens the download page) — it never downloads
@@ -13,13 +13,13 @@ stays private — only the distributable build is public). Schema::
     {
       "version": "0.7.0",
       "download_page": "https://github.com/.../releases/tag/v0.7.0",
-      "dmg_url": "https://github.com/.../Breakthrough-0.7.0.dmg",  # reserved (auto-install phase)
+      "dmg_url": "https://github.com/.../Misanthropic-0.7.0.dmg",  # reserved (auto-install phase)
       "sha256": "<dmg sha256>",                                    # reserved
       "notes": "short summary",
       "min_macos": "11.0"
     }
 
-Point `BREAKTHROUGH_APPCAST_URL` at a local ``file://`` manifest to test.
+Point `MISANTHROPIC_APPCAST_URL` at a local ``file://`` manifest to test.
 """
 
 import json
@@ -32,8 +32,8 @@ from . import __version__
 from .sessions import CONFIG_DIR
 
 APPCAST_URL = os.environ.get(
-    "BREAKTHROUGH_APPCAST_URL",
-    "https://raw.githubusercontent.com/Blacklord100/breakthrough-releases/main/appcast.json",
+    "MISANTHROPIC_APPCAST_URL",
+    "https://raw.githubusercontent.com/Blacklord100/misanthropic-releases/main/appcast.json",
 )
 STATE_FILE = CONFIG_DIR / "updater.json"
 _TIMEOUT_S = 6
@@ -69,7 +69,7 @@ def _fetch_json(url, timeout=_TIMEOUT_S):
     """GET the appcast and parse it. Returns a dict, or None on any failure."""
     try:
         req = urllib.request.Request(
-            url, headers={"User-Agent": f"breakthrough/{__version__}"}
+            url, headers={"User-Agent": f"misanthropic/{__version__}"}
         )
         ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
@@ -79,7 +79,7 @@ def _fetch_json(url, timeout=_TIMEOUT_S):
         return None
 
 
-# ---- persisted prefs (~/.breakthrough/updater.json) -------------------------
+# ---- persisted prefs (~/.misanthropic/updater.json) -------------------------
 #
 # Mirrors the atomic-write pattern in sessions.py so a crash can't corrupt it.
 

@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "breakthrough"
-version = "0.7.2"
-description = "Anthropic-API-compatible server backed by your local Claude Code CLI. No API key."
+name = "misanthropic"
+version = "0.8.0"
+description = "The Anthropic Messages API, conjured out of your own Claude Code login. No API key. No per-token bill. Localhost only."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Breakthrough" }]
-keywords = ["claude", "anthropic", "api", "proxy", "claude-code", "cli", "messages-api"]
+authors = [{ name = "Misanthropic" }]
+keywords = ["claude", "anthropic", "api", "proxy", "claude-code", "cli", "messages-api", "subscription", "no-api-key", "local-llm"]
 classifiers = [
     "Environment :: Console",
     "Programming Language :: Python :: 3",
@@ -25,11 +25,11 @@ dependencies = []
 app = ["rumps>=0.4"]
 
 [project.scripts]
-breakthrough = "breakthrough.cli:main"
-breakthrough-app = "breakthrough.app:main"
+misanthropic = "misanthropic.cli:main"
+misanthropic-app = "misanthropic.app:main"
 
 [project.urls]
-Homepage = "https://github.com/Blacklord100/breakthrough-cli"
+Homepage = "https://github.com/Blacklord100/misanthropic"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/breakthrough"]
+packages = ["src/misanthropic"]

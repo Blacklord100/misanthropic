@@ -1,10 +1,10 @@
-"""Breakthrough menu-bar app (macOS).
+"""Misanthropic menu-bar app (macOS).
 
 Launches the local Anthropic-compatible server in a background thread and exposes
 start/stop, the dashboard, and a "start at login" toggle from the menu bar. The
-server is the same one as `breakthrough serve` — this is just a native shell.
+server is the same one as `misanthropic serve` — this is just a native shell.
 
-Requires `rumps` (an optional dependency): pip install "breakthrough[app]".
+Requires `rumps` (an optional dependency): pip install "misanthropic[app]".
 """
 
 import os
@@ -22,7 +22,7 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8787"))
 BASE_URL = f"http://{HOST}:{PORT}"
 
-LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.breakthrough.app.plist"
+LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.misanthropic.app.plist"
 ICON_PATH = Path(__file__).parent / "resources" / "menubar.png"
 
 
@@ -47,22 +47,22 @@ def _running_app_bundle():
 def _login_program_args():
     """LaunchAgent ProgramArguments that actually launch something that exists.
 
-    The old code hardcoded `open -a Breakthrough` against a bundle that didn't
+    The old code hardcoded `open -a Misanthropic` against a bundle that didn't
     exist (no packaging yet), so login launch silently did nothing. Now: prefer
     the real .app bundle — the one we're frozen inside, or a built one in
     /Applications or ~/Applications (see packaging/build.sh) — then fall back to
     the console script, then a bare module run."""
     bundles = [b for b in (
         _running_app_bundle(),
-        Path("/Applications/Breakthrough.app"),
-        Path.home() / "Applications" / "Breakthrough.app",
+        Path("/Applications/Misanthropic.app"),
+        Path.home() / "Applications" / "Misanthropic.app",
     ) if b and b.exists()]
     if bundles:
         return ["/usr/bin/open", str(bundles[0])]
-    exe = shutil.which("breakthrough-app")
+    exe = shutil.which("misanthropic-app")
     if exe:
         return [exe]
-    return [sys.executable, "-m", "breakthrough.app"]
+    return [sys.executable, "-m", "misanthropic.app"]
 
 
 def _pbcopy(text):
@@ -79,22 +79,22 @@ def main():
     except ImportError:
         raise SystemExit(
             "The menu-bar app needs `rumps`. Install it with:\n"
-            '    pip install "breakthrough[app]"\n'
-            "or just run the server directly: breakthrough serve"
+            '    pip install "misanthropic[app]"\n'
+            "or just run the server directly: misanthropic serve"
         )
 
-    class Breakthrough(rumps.App):
+    class Misanthropic(rumps.App):
         def __init__(self):
             # Icon-only menu bar: a skull silhouette with an Anthropic-style
             # asterisk on the forehead. Loaded as a template image so macOS
             # auto-tints it for light/dark. If the bundled asset is missing for
             # any reason, fall back to the old text title.
             if ICON_PATH.exists():
-                super().__init__("Breakthrough", title=None,
+                super().__init__("Misanthropic", title=None,
                                  icon=str(ICON_PATH), template=True,
                                  quit_button=None)
             else:
-                super().__init__("◐ BT", quit_button=None)
+                super().__init__("☠ MA", quit_button=None)
             self.httpd = None
             self.thread = None
             self.toggle_item = rumps.MenuItem("Stop server", callback=self.toggle)
@@ -125,7 +125,7 @@ def main():
             if not _claude_ready():
                 rumps.alert(
                     "Claude Code not found",
-                    "Breakthrough needs the `claude` CLI installed and logged in. "
+                    "Misanthropic needs the `claude` CLI installed and logged in. "
                     "Install Claude Code, then restart this app.",
                 )
             self.start_server()
@@ -165,7 +165,7 @@ def main():
             claude.set_web_enabled(new)
             sender.state = new
             rumps.notification(
-                "Breakthrough",
+                "Misanthropic",
                 "Web search " + ("enabled" if new else "disabled"),
                 "New requests can search the web." if new else "Back to text-only (bare API).",
             )
@@ -176,7 +176,7 @@ def main():
         def copy_base_url(self, _):
             import rumps as _r
             _pbcopy(BASE_URL)
-            _r.notification("Breakthrough", "Copied", BASE_URL)
+            _r.notification("Misanthropic", "Copied", BASE_URL)
 
         # ---- updates ----
         def on_update_item(self, _):
@@ -220,7 +220,7 @@ def main():
                 elif not updater.already_notified(version):
                     updater.mark_notified(version)
                     rumps.notification(
-                        "Breakthrough",
+                        "Misanthropic",
                         f"Update available — v{version}",
                         (info.get("notes") or "Click the menu-bar item to download.").strip()[:200],
                     )
@@ -231,7 +231,7 @@ def main():
         def _prompt_update(self, info):
             version = info.get("version", "?")
             notes = (info.get("notes") or "").strip()
-            message = f"Breakthrough v{version} is available."
+            message = f"Misanthropic v{version} is available."
             if notes:
                 message += "\n\n" + notes
             # rumps.alert -> legacy NSAlert returns: ok=1, cancel=0, other=-1.
@@ -263,7 +263,7 @@ def main():
             plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.breakthrough.app</string>
+  <key>Label</key><string>com.misanthropic.app</string>
   <key>ProgramArguments</key><array>{args_xml}</array>
   <key>RunAtLoad</key><true/>
 </dict></plist>
@@ -275,7 +275,7 @@ def main():
             self.stop_server()
             _r.quit_application()
 
-    Breakthrough().run()
+    Misanthropic().run()
 
 
 if __name__ == "__main__":

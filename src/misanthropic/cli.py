@@ -1,11 +1,11 @@
-"""`breakthrough` command.
+"""`misanthropic` command.
 
-  breakthrough serve [--host H --port P]        run the Anthropic-compatible server
-  breakthrough chat "..." [--model --system]    one-off completion (quick test)
-  breakthrough keys add|remove|list [KEY]       manage approved keys (= sessions)
-  breakthrough sessions list|forget [KEY]       inspect / reset key->session links
+  misanthropic serve [--host H --port P]        run the Anthropic-compatible server
+  misanthropic chat "..." [--model --system]    one-off completion (quick test)
+  misanthropic keys add|remove|list [KEY]       manage approved keys (= sessions)
+  misanthropic sessions list|forget [KEY]       inspect / reset key->session links
 
-With no subcommand, `breakthrough` starts the server.
+With no subcommand, `misanthropic` starts the server.
 """
 
 import argparse
@@ -19,20 +19,20 @@ from .claude import ClaudeError, DEFAULT_MODEL, run_blocking
 def _cmd_keys(args):
     if args.action == "add":
         if not args.key:
-            print("usage: breakthrough keys add <key>", file=sys.stderr)
+            print("usage: misanthropic keys add <key>", file=sys.stderr)
             return 1
         sessions.add_key(args.key)
         print(f"approved key added: {args.key}")
     elif args.action == "remove":
         if not args.key:
-            print("usage: breakthrough keys remove <key>", file=sys.stderr)
+            print("usage: misanthropic keys remove <key>", file=sys.stderr)
             return 1
         sessions.remove_key(args.key)
         print(f"key removed (and its session forgotten): {args.key}")
     elif args.action == "list":
         keys = sorted(sessions.approved_keys())
         if not keys:
-            print("no approved keys. add one with: breakthrough keys add <key>")
+            print("no approved keys. add one with: misanthropic keys add <key>")
         else:
             for k in keys:
                 print(k)
@@ -49,7 +49,7 @@ def _cmd_sessions(args):
                 print(f"{key}\t{rec.get('session_id', '-')}\tturns={rec.get('turns', 0)}\t{rec.get('updated', '')}")
     elif args.action == "forget":
         if not args.key:
-            print("usage: breakthrough sessions forget <key>", file=sys.stderr)
+            print("usage: misanthropic sessions forget <key>", file=sys.stderr)
             return 1
         sessions.forget_session(args.key)
         print(f"session forgotten; next request under '{args.key}' starts fresh.")
@@ -58,10 +58,10 @@ def _cmd_sessions(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="breakthrough",
+        prog="misanthropic",
         description="Anthropic-API-compatible server backed by your local Claude Code CLI. No API key.",
     )
-    parser.add_argument("--version", action="version", version=f"breakthrough {__version__}")
+    parser.add_argument("--version", action="version", version=f"misanthropic {__version__}")
     sub = parser.add_subparsers(dest="cmd")
 
     p_serve = sub.add_parser("serve", help="Run the Anthropic-compatible API server")

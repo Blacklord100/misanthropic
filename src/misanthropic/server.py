@@ -11,7 +11,7 @@ hosted API:
 Two modes, chosen by whether any approved keys are configured (see sessions.py):
 
   * Stateless mode (no approved keys): each request is ephemeral, like the
-    hosted API. Optional single-secret gate via BREAKTHROUGH_API_KEY.
+    hosted API. Optional single-secret gate via MISANTHROPIC_API_KEY.
   * Session mode (approved keys configured): the x-api-key both authorizes the
     client and *names a conversation*. The first request under a key starts a
     persistent claude session; later requests `--resume` it, so the chat
@@ -31,7 +31,7 @@ from . import __version__, dashboard, request_log, sessions, translate
 from .claude import ClaudeError, DEFAULT_MODEL, run_blocking, run_web, stream_events, web_enabled
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
-API_KEY = os.environ.get("BREAKTHROUGH_API_KEY")
+API_KEY = os.environ.get("MISANTHROPIC_API_KEY")
 
 # The activity log keeps the full prompt/response text so the dashboard can show
 # it in full when a row is expanded. This cap is only a runaway guard for a
@@ -46,7 +46,7 @@ def _is_invalid_session_error(message):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = f"breakthrough/{__version__}"
+    server_version = f"misanthropic/{__version__}"
     protocol_version = "HTTP/1.1"
 
     # ---- helpers ------------------------------------------------------------
@@ -177,7 +177,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             return self._send_json(200, {
                 "status": "ok",
-                "service": "breakthrough",
+                "service": "misanthropic",
                 "version": __version__,
                 "backend": "claude-code-cli",
                 "mode": "session" if sessions.session_mode_enabled() else "stateless",
@@ -492,13 +492,13 @@ def serve(host="127.0.0.1", port=8787):
 
     httpd = make_httpd(host, port)
     base = f"http://{host}:{port}"
-    print(f"breakthrough {__version__} — Anthropic-compatible API on {base}", file=sys.stderr)
+    print(f"misanthropic {__version__} — Anthropic-compatible API on {base}", file=sys.stderr)
     if session_mode:
         print(f"  mode: session  ·  {len(sessions.approved_keys())} approved key(s)  ·  "
               f"sessions persist & resume per key", file=sys.stderr)
     else:
         print(f"  mode: stateless  ·  auth: {'x-api-key required' if API_KEY else 'open (local)'}", file=sys.stderr)
-    print(f"  web search: {'on (BREAKTHROUGH_WEB)' if web_enabled() else 'off — set BREAKTHROUGH_WEB=1'}", file=sys.stderr)
+    print(f"  web search: {'on (MISANTHROPIC_WEB)' if web_enabled() else 'off — set MISANTHROPIC_WEB=1'}", file=sys.stderr)
     print(f"  point your client at  base_url={base}", file=sys.stderr)
     try:
         httpd.serve_forever()
