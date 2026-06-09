@@ -4,6 +4,7 @@
   misanthropic chat "..." [--model --system]    one-off completion (quick test)
   misanthropic keys add|remove|list [KEY]       manage approved keys (= sessions)
   misanthropic sessions list|forget [KEY]       inspect / reset key->session links
+  misanthropic savings                          what you'd have paid on the hosted API
 
 With no subcommand, `misanthropic` starts the server.
 """
@@ -12,7 +13,7 @@ import argparse
 import os
 import sys
 
-from . import __version__, server, sessions, translate
+from . import __version__, savings, server, sessions, translate
 from .claude import ClaudeError, DEFAULT_MODEL, run_blocking
 
 
@@ -56,6 +57,18 @@ def _cmd_sessions(args):
     return 0
 
 
+def _cmd_savings():
+    s = savings.summary()
+    print(f"You'd have paid ${s['all_time_usd']:,.2f} on the hosted API.")
+    print(f"Misanthropic charged you $0.00.")
+    print(f"  this month: ${s['month_usd']:,.2f} ({s['month']})")
+    print(f"  requests:   {s['all_time_requests']:,}  ·  "
+          f"tokens: {s['input_tokens']:,} in / {s['output_tokens']:,} out")
+    if s.get("since"):
+        print(f"  since:      {s['since']}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="misanthropic",
@@ -81,6 +94,8 @@ def main(argv=None):
     p_sessions.add_argument("action", choices=["list", "forget"])
     p_sessions.add_argument("key", nargs="?", help="The API key")
 
+    sub.add_parser("savings", help="Show what you'd have paid on the hosted API")
+
     args = parser.parse_args(argv)
 
     if args.cmd in (None, "serve"):
@@ -103,6 +118,9 @@ def main(argv=None):
 
     if args.cmd == "sessions":
         return _cmd_sessions(args)
+
+    if args.cmd == "savings":
+        return _cmd_savings()
 
     parser.print_help()
     return 1

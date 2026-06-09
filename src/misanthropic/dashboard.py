@@ -56,6 +56,12 @@ PAGE = r"""<!doctype html>
   .badge-mode.web, .badge-mode.session-web { color:var(--acc); border-color:#2a3a73; }
   .badge-mode.session, .badge-mode.session-web { font-weight:600; }
   .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  /* savings banner */
+  .savings { background:linear-gradient(135deg,#13241a,#171a21); border:1px solid #234534; border-radius:14px; padding:16px 18px; margin-bottom:20px; }
+  .save-big { font-size:16px; font-weight:500; }
+  .save-big b { color:var(--ok); font-weight:700; }
+  .save-sub { color:var(--dim); font-size:12.5px; margin-top:5px; }
+  .save-sub b { color:var(--fg); }
 </style>
 </head>
 <body>
@@ -65,6 +71,7 @@ PAGE = r"""<!doctype html>
   <span class="meta" id="meta">…</span>
 </header>
 <main>
+  <div class="savings" id="savings" hidden></div>
   <div class="row">
     <input type="text" id="label" placeholder="Project name (e.g. my-app)" />
     <button id="create">+ New key</button>
@@ -161,14 +168,28 @@ function renderRequests(reqs){
   wrap.innerHTML = `<table class="reqs"><thead><tr><th>time</th><th>key</th><th>model</th><th>mode</th><th>tokens</th><th>dur</th><th>status</th></tr></thead><tbody>${rows}</tbody></table>`;
   restore();
 }
+function money(n){ return "$"+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function renderSavings(s){
+  const el = $("#savings");
+  if(!s || (!s.all_time_usd && !s.all_time_requests)){ el.hidden = true; return; }
+  el.hidden = false;
+  const n = s.all_time_requests||0;
+  const since = s.since ? new Date(s.since).toLocaleDateString() : null;
+  el.innerHTML =
+    `<div class="save-big">☠ You'd have paid <b>${money(s.all_time_usd)}</b> on the API.</div>`+
+    `<div class="save-sub">Misanthropic charged you <b>$0.00</b>. `+
+    `This month ${money(s.month_usd)} · ${n.toLocaleString()} request${n===1?"":"s"}`+
+    (since?` · since ${esc(since)}`:"")+`</div>`;
+}
 let lastSig = null;
 async function pollRequests(){
   try{
     const r = await (await fetch(base+"/admin/requests")).json();
+    renderSavings(r.savings);  // always refresh — persists across restarts
     const reqs = r.requests || [];
-    // Re-render only when the set of requests actually changed; otherwise an
-    // open row would lose its scroll position (and any text selection) on
-    // every poll. New records have a fresh ts, so length + newest ts is enough.
+    // Re-render the table only when the set of requests actually changed;
+    // otherwise an open row would lose its scroll position (and any text
+    // selection). New records have a fresh ts, so length + newest ts is enough.
     const sig = reqs.length + "|" + (reqs[0] ? reqs[0].ts : "");
     if(sig === lastSig) return;
     lastSig = sig;

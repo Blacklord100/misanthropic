@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "misanthropic"
-version = "0.8.1"
+version = "0.8.2"
 description = "The Anthropic Messages API, conjured out of your own Claude Code login. No API key. No per-token bill. Localhost only."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -23,6 +23,7 @@ dependencies = []
 # The core (server + CLI) has zero runtime deps. The menu-bar app adds rumps.
 [project.optional-dependencies]
 app = ["rumps>=0.4"]
+dev = ["pytest>=7"]
 
 [project.scripts]
 misanthropic = "misanthropic.cli:main"
@@ -33,3 +34,7 @@ Homepage = "https://github.com/Blacklord100/misanthropic"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/misanthropic"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -27,7 +27,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, dashboard, request_log, sessions, translate
+from . import __version__, dashboard, request_log, savings, sessions, translate
 from .claude import ClaudeError, DEFAULT_MODEL, resolve_web, run_blocking, run_web, stream_events, web_policy
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
@@ -135,7 +135,8 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _log_finalize(self, status, message_obj=None, error_msg=None,
-                      in_tokens=None, out_tokens=None, response_text=None):
+                      in_tokens=None, out_tokens=None, response_text=None,
+                      web_requests=None):
         rec = getattr(self, "_log_rec", None)
         if rec is None:
             return
@@ -145,6 +146,8 @@ class Handler(BaseHTTPRequestHandler):
             usage = message_obj.get("usage") or {}
             rec["input_tokens"] = usage.get("input_tokens", 0)
             rec["output_tokens"] = usage.get("output_tokens", 0)
+            if web_requests is None:
+                web_requests = (usage.get("server_tool_use") or {}).get("web_search_requests")
             parts = [blk.get("text") or "" for blk in (message_obj.get("content") or [])
                      if isinstance(blk, dict) and blk.get("type") == "text"]
             rec["response_text"] = "\n".join(p for p in parts if p)[:MAX_LOG_TEXT]
@@ -152,11 +155,24 @@ class Handler(BaseHTTPRequestHandler):
             rec["input_tokens"] = in_tokens
         if out_tokens is not None:
             rec["output_tokens"] = out_tokens
+        if web_requests is not None:
+            rec["web_requests"] = web_requests
         if response_text is not None:
             rec["response_text"] = response_text[:MAX_LOG_TEXT]
         if error_msg:
             rec["error"] = str(error_msg)[:MAX_LOG_TEXT]
         request_log.append(rec)
+        # Tally the hosted-API price we dodged — successful generations only.
+        if status == 200:
+            try:
+                savings.record(
+                    rec.get("model"),
+                    rec.get("input_tokens", 0),
+                    rec.get("output_tokens", 0),
+                    rec.get("web_requests", 0),
+                )
+            except Exception:
+                pass  # a savings hiccup must never fail the request
         self._log_rec = None
 
     def _send_html(self, html):
@@ -203,7 +219,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/admin/requests":
             if not self._is_local():
                 return self._send_error(403, "permission_error", "Admin API is local-only.")
-            return self._send_json(200, {"requests": request_log.recent()})
+            return self._send_json(200, {"requests": request_log.recent(),
+                                          "savings": savings.summary()})
         self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
 
     def _admin_state(self):
@@ -380,6 +397,7 @@ class Handler(BaseHTTPRequestHandler):
             self._log_finalize(200,
                                in_tokens=usage.get("input_tokens"),
                                out_tokens=usage.get("output_tokens"),
+                               web_requests=(usage.get("server_tool_use") or {}).get("web_search_requests"),
                                response_text=response_text)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client hung up mid-stream

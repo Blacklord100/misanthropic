@@ -7,6 +7,20 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v0.8.2 — 2026-06-09
+- **"Money saved" counter.** The dashboard now shows a running total of what the
+  hosted Anthropic API *would* have charged for every token you've run —
+  *"You'd have paid $X on the API. Misanthropic charged you $0.00."* — all-time
+  plus this month. It persists across restarts under `~/.misanthropic/savings.json`
+  (the request log is in-memory and clears; this doesn't). Same figure from the
+  terminal via `misanthropic savings`. List prices live in `pricing.py`.
+- **Test suite + CI.** Added a `pytest` suite (`tests/`) covering the schema
+  translation, model-tier mapping, web policy, sessions store, pricing, and the
+  savings tally — 57 tests, no `claude` CLI required — plus a GitHub Actions
+  workflow running them on Python 3.9–3.13 and building the wheel. Install with
+  `pip install -e ".[dev]"` and run `pytest`.
+- `python -m misanthropic` now works as an alias for the `misanthropic` command.
+
 ## v0.8.1 — 2026-06-09
 - **Web search is now per-request, like the hosted API.** Previously web search
   was a single global server flag (`MISANTHROPIC_WEB=1`) that ignored the request

@@ -115,6 +115,10 @@ below), open the dashboard, copy the base URL, and toggle "start at login". The
 dashboard (also at
 `http://127.0.0.1:8787/` whenever the server runs) lets you:
 
+- see a running **"money saved"** banner — the hosted-API list price of every token
+  you've ever run, totalled (all-time + this month). The whole pitch, as a live
+  number: *"You'd have paid $X on the API. Misanthropic charged you $0.00."* (Same
+  figure from the terminal: `misanthropic savings`.)
 - mint per-project API keys (shaped `sk-ant-local-…` so they drop straight into any
   Anthropic-SDK tooling),
 - copy ready-to-paste connection snippets (`ANTHROPIC_BASE_URL` + key),
