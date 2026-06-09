@@ -35,6 +35,14 @@ def test_sub_cent_precision_survives():
     assert savings.summary()["all_time_usd"] == 0.0012
 
 
+def test_record_counts_cached_prompt_tokens():
+    # A big auto-cached opus prompt: bulk lands in cache_write, must still count.
+    savings.record("opus", input_tokens=2, output_tokens=4, cache_write_tokens=1_000_000)
+    s = savings.summary()
+    assert 4.9 < s["all_time_usd"] < 5.1
+    assert s["input_tokens"] >= 1_000_000   # cached tokens folded into the prompt total
+
+
 def test_persists_across_reload():
     savings.record("haiku", 1_000_000, 1_000_000)  # $1 + $5 = $6
     # A fresh summary() re-reads the file from disk — simulates a restart.

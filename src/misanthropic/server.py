@@ -136,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _log_finalize(self, status, message_obj=None, error_msg=None,
                       in_tokens=None, out_tokens=None, response_text=None,
-                      web_requests=None):
+                      web_requests=None, cache_write=None, cache_read=None):
         rec = getattr(self, "_log_rec", None)
         if rec is None:
             return
@@ -146,6 +146,11 @@ class Handler(BaseHTTPRequestHandler):
             usage = message_obj.get("usage") or {}
             rec["input_tokens"] = usage.get("input_tokens", 0)
             rec["output_tokens"] = usage.get("output_tokens", 0)
+            # Claude Code auto-caches; these carry the bulk of large prompts.
+            if cache_write is None:
+                cache_write = usage.get("cache_creation_input_tokens", 0)
+            if cache_read is None:
+                cache_read = usage.get("cache_read_input_tokens", 0)
             if web_requests is None:
                 web_requests = (usage.get("server_tool_use") or {}).get("web_search_requests")
             parts = [blk.get("text") or "" for blk in (message_obj.get("content") or [])
@@ -157,6 +162,10 @@ class Handler(BaseHTTPRequestHandler):
             rec["output_tokens"] = out_tokens
         if web_requests is not None:
             rec["web_requests"] = web_requests
+        if cache_write is not None:
+            rec["cache_write"] = cache_write
+        if cache_read is not None:
+            rec["cache_read"] = cache_read
         if response_text is not None:
             rec["response_text"] = response_text[:MAX_LOG_TEXT]
         if error_msg:
@@ -170,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
                     rec.get("input_tokens", 0),
                     rec.get("output_tokens", 0),
                     rec.get("web_requests", 0),
+                    rec.get("cache_write", 0),
+                    rec.get("cache_read", 0),
                 )
             except Exception:
                 pass  # a savings hiccup must never fail the request
@@ -398,6 +409,8 @@ class Handler(BaseHTTPRequestHandler):
                                in_tokens=usage.get("input_tokens"),
                                out_tokens=usage.get("output_tokens"),
                                web_requests=(usage.get("server_tool_use") or {}).get("web_search_requests"),
+                               cache_write=usage.get("cache_creation_input_tokens", 0),
+                               cache_read=usage.get("cache_read_input_tokens", 0),
                                response_text=response_text)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client hung up mid-stream

@@ -29,9 +29,18 @@ def tier_for(model):
     return tier if tier in PRICES else DEFAULT_TIER
 
 
-def estimated_cost(model, input_tokens=0, output_tokens=0, web_search_requests=0):
-    """What the hosted API would have charged for this generation, in USD."""
+def estimated_cost(model, input_tokens=0, output_tokens=0, web_search_requests=0,
+                   cache_write_tokens=0, cache_read_tokens=0):
+    """What the hosted API would have charged for this generation, in USD.
+
+    Claude Code auto-caches large prompts, so the CLI reports most prompt tokens
+    under cache_creation / cache_read rather than input_tokens. A hosted-API user
+    *without* caching pays full input price for all of them, so we count every
+    prompt token (input + cache write + cache read) at the input rate — the honest
+    "you'd have paid" figure.
+    """
     pin, pout = PRICES[tier_for(model)]
-    usd = (input_tokens or 0) / 1e6 * pin + (output_tokens or 0) / 1e6 * pout
+    prompt = (input_tokens or 0) + (cache_write_tokens or 0) + (cache_read_tokens or 0)
+    usd = prompt / 1e6 * pin + (output_tokens or 0) / 1e6 * pout
     usd += (web_search_requests or 0) / 1000.0 * WEB_SEARCH_USD_PER_1K
     return usd

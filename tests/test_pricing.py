@@ -26,5 +26,11 @@ def test_estimated_cost_counts_web_search():
     assert cost == pytest.approx(10.0)
 
 
+def test_estimated_cost_counts_cached_prompt_tokens():
+    # Claude Code auto-caches; cached prompt tokens still count at the input rate.
+    assert pricing.estimated_cost("opus", 0, 0, cache_write_tokens=1_000_000) == pytest.approx(5.0)
+    assert pricing.estimated_cost("opus", 0, 0, cache_read_tokens=1_000_000) == pytest.approx(5.0)
+
+
 def test_estimated_cost_zero():
     assert pricing.estimated_cost("sonnet", 0, 0) == 0.0

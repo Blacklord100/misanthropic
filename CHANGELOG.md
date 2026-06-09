@@ -7,6 +7,15 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.0.1 — 2026-06-10
+- **Fix: the savings counter now counts auto-cached prompt tokens.** Claude Code
+  automatically prompt-caches large requests, so most prompt tokens were reported
+  under `cache_creation_input_tokens` / `cache_read_input_tokens` rather than
+  `input_tokens` — and the savings math ignored them, badly undercounting big
+  requests. It now counts every prompt token (input + cache write + cache read) at
+  the input rate, i.e. what a hosted-API user *without* caching would pay. The
+  activity log's "in" total and `misanthropic savings` reflect the same.
+
 ## v1.0.0 — 2026-06-10
 First stable release. The Anthropic Messages API, served from your own Claude Code
 login — no API key, no per-token bill. Everything that landed on the road to 1.0:

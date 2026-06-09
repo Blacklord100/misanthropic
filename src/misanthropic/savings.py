@@ -56,18 +56,22 @@ def _add(bucket, usd, in_tokens, out_tokens):
     bucket["requests"] = bucket.get("requests", 0) + 1
 
 
-def record(model, input_tokens=0, output_tokens=0, web_search_requests=0):
+def record(model, input_tokens=0, output_tokens=0, web_search_requests=0,
+           cache_write_tokens=0, cache_read_tokens=0):
     """Add one generation's would-have-cost to the tally. Returns the USD added."""
-    usd = pricing.estimated_cost(model, input_tokens, output_tokens, web_search_requests)
-    if usd <= 0 and not input_tokens and not output_tokens:
+    usd = pricing.estimated_cost(model, input_tokens, output_tokens, web_search_requests,
+                                 cache_write_tokens, cache_read_tokens)
+    # All prompt tokens count toward the "in" total (input + cached prompt tokens).
+    prompt = (input_tokens or 0) + (cache_write_tokens or 0) + (cache_read_tokens or 0)
+    if usd <= 0 and not prompt and not output_tokens:
         return 0.0
     now = datetime.now(timezone.utc)
     month = now.strftime("%Y-%m")
     with _lock:
         state = _load()
-        _add(state["all_time"], usd, input_tokens, output_tokens)
+        _add(state["all_time"], usd, prompt, output_tokens)
         bucket = state.setdefault("months", {}).setdefault(month, _bucket())
-        _add(bucket, usd, input_tokens, output_tokens)
+        _add(bucket, usd, prompt, output_tokens)
         if not state.get("since"):
             state["since"] = now.isoformat(timespec="seconds")
         _save(state)
