@@ -117,10 +117,10 @@ with open(path, "w") as f:
     json.dump(manifest, f, indent=2)
     f.write("\n")
 PY
-if git diff --quiet -- appcast.json; then
+git add appcast.json   # stage first so the diff check also catches a brand-new file
+if git diff --cached --quiet -- appcast.json; then
   echo "==> appcast.json already current"
 else
-  git add appcast.json
   git commit -q -m "appcast: v${VERSION}"
   git push -q origin "$BRANCH"
   echo "==> appcast.json updated + pushed"

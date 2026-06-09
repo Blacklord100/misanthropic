@@ -1,0 +1,8 @@
+{
+  "version": "0.8.5",
+  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v0.8.5",
+  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v0.8.5/Misanthropic-0.8.5.dmg",
+  "sha256": "1d190f5c314957e68d7290b6d66e0bf1ec23e064660b94f6189b991d7f06f740",
+  "notes": "- **Single repo.** Source, releases, and the update feed now live in one public\n  repo (`Blacklord100/misanthropic`) instead of a separate `*-releases` repo. The\n  in-app updater polls `appcast.json` at the repo root; `publish-release.sh`\n  publishes the release (dmg + wheel + sdist), auto-stamps install instructions in\n  the release body, and commits the appcast \u2014 all in one place. No behavior change\n  to the app itself.",
+  "min_macos": "11.0"
+}
