@@ -45,17 +45,15 @@ print(msg.content[0].text)
 
 Pick the one that fits. The first is the fastest.
 
-### 1 · macOS app — one line, no warning ⚡
+### 1 · macOS app — one line ⚡
 
-Paste into **Terminal**. Downloads, installs to Applications, and opens it —
-skipping the macOS "can't be verified" prompt:
+Paste into **Terminal**. Downloads, installs to Applications, and opens it:
 
 ```bash
 curl -fsSL https://github.com/Blacklord100/misanthropic/releases/latest/download/Misanthropic.dmg -o /tmp/m.dmg \
   && hdiutil attach /tmp/m.dmg -nobrowse -quiet \
   && cp -R "/Volumes/Misanthropic/Misanthropic.app" /Applications/ \
   && hdiutil detach "/Volumes/Misanthropic" -quiet \
-  && xattr -dr com.apple.quarantine /Applications/Misanthropic.app \
   && open /Applications/Misanthropic.app
 ```
 
@@ -64,24 +62,18 @@ A skull appears in your menu bar and the server starts on `http://127.0.0.1:8787
 ### 2 · macOS app — download the .dmg by hand
 
 **[⬇ Download the latest `.dmg`](https://github.com/Blacklord100/misanthropic/releases/latest)**
-→ open it → drag the skull onto **Applications**. First launch shows *"Apple could
-not verify…"* → click **Done**, then **System Settings → Privacy & Security → Open
-Anyway** (one time, then it's normal).
-
-> **Why the warning?** The app isn't *notarized* by Apple — that needs a paid
-> Developer account ($99/yr) this project doesn't have. It is **not** malware;
-> macOS flags anything downloaded outside the App Store. The one-liner's
-> `xattr -dr com.apple.quarantine` just clears that download flag.
+→ open it → drag the skull onto **Applications**. Releases from v1.0.1 on are
+signed with a Developer ID and notarized by Apple, so the app opens with a
+normal double-click — no Gatekeeper warning.
 
 > **App vs. command line.** The `.app` is the menu-bar GUI — it does **not** add a
 > `misanthropic` command to your terminal. For the CLI (`misanthropic serve`,
 > `misanthropic savings`, …) install via pipx or pip below. Both share the same
 > `~/.misanthropic` state, so the app and CLI always agree.
 
-### 3 · No app, no Gatekeeper (pipx)
+### 3 · No app (pipx)
 
-A pip install isn't a quarantined bundle, so there's never a prompt — best for
-CLI/server use:
+Best for CLI/server use:
 
 ```bash
 pipx install "misanthropic[app] @ git+https://github.com/Blacklord100/misanthropic.git"
@@ -300,9 +292,11 @@ bash packaging/release.sh --publish   # ...then cut the GitHub release + update 
 ```
 
 The `.dmg` is a styled drag-to-Applications installer with the generated skull icon.
-Builds are ad-hoc signed (so they run on Apple Silicon); set `SIGN_IDENTITY` for a
-Developer ID / notarized build that opens with no warning. Full details, including
-signing + notarization, in [packaging/DISTRIBUTION.md](packaging/DISTRIBUTION.md).
+Release builds are signed with a Developer ID and notarized
+(`bash packaging/finish-signing.sh` runs the whole chain: sign → notarize →
+staple → dmg); without `SIGN_IDENTITY` set, `build.sh` falls back to ad-hoc
+signing for local use. Full details in
+[packaging/DISTRIBUTION.md](packaging/DISTRIBUTION.md).
 
 ## License
 

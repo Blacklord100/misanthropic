@@ -37,7 +37,16 @@ if [ "$IDENTITY" = "-" ]; then
   codesign --force --deep --sign - "$APP"
 else
   echo "==> Signing with: $IDENTITY (hardened runtime)"
-  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+  # Sign every nested Mach-O individually: --deep does not traverse
+  # Resources/lib, so py2app's Python extension modules keep their ad-hoc
+  # signatures and notarization rejects the bundle.
+  find "$APP" -type f -print0 | xargs -0 file | grep Mach-O | cut -d: -f1 | sort -u |
+    while IFS= read -r f; do
+      codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f" 2>/dev/null
+    done
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+    "$APP/Contents/Frameworks/Python.framework/Versions/"[0-9]* 2>/dev/null || true
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 fi
 codesign --verify --deep --strict "$APP" && echo "    signature OK"
 

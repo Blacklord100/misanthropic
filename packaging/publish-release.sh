@@ -46,7 +46,7 @@ ASSETS=("$DMG" "$STABLE_DMG")
 CHANGE="$(awk -v tag="## ${TAG}" 'index($0,tag)==1{f=1;next} /^## v/{if(f)exit} f' CHANGELOG.md || true)"
 [ -n "$CHANGE" ] || CHANGE="Misanthropic ${VERSION}"
 
-ONELINER="curl -fsSL ${DMG_URL} -o /tmp/m.dmg && hdiutil attach /tmp/m.dmg -nobrowse -quiet && cp -R \"/Volumes/Misanthropic/Misanthropic.app\" /Applications/ && hdiutil detach \"/Volumes/Misanthropic\" -quiet && xattr -dr com.apple.quarantine /Applications/Misanthropic.app && open /Applications/Misanthropic.app"
+ONELINER="curl -fsSL ${DMG_URL} -o /tmp/m.dmg && hdiutil attach /tmp/m.dmg -nobrowse -quiet && cp -R \"/Volumes/Misanthropic/Misanthropic.app\" /Applications/ && hdiutil detach \"/Volumes/Misanthropic\" -quiet && open /Applications/Misanthropic.app"
 
 # Build the release body in a file (top-level heredocs — avoids quoting traps).
 NOTES_FILE="$(mktemp)"
@@ -56,27 +56,25 @@ cat > "$NOTES_FILE" <<EOF
 
 **Requirements:** macOS 11+, and the [\`claude\`](https://docs.claude.com/en/docs/claude-code) CLI installed and logged in (the app uses *your own* Claude login).
 
-### ⚡ Fast install — one line, no scary warning
+### ⚡ Fast install — one line
 
-Paste this into **Terminal**. It downloads the app, installs it, and opens it — skipping the macOS "can't be verified" prompt:
+Paste this into **Terminal**. It downloads the app, installs it, and opens it:
 
 \`\`\`bash
 ${ONELINER}
 \`\`\`
 
-> **Why a warning?** The app is not *notarized* by Apple (that needs a paid \$99/yr Developer account). It is **not** malware — macOS flags anything downloaded outside the App Store. The \`xattr -dr com.apple.quarantine\` part clears that flag so it opens normally.
-
 ### Option A — download the .dmg by hand
 
-Download **${DMG_NAME}** below, open it, and drag the skull onto **Applications**. First launch: macOS says *"Apple could not verify…"* → **System Settings → Privacy & Security → Open Anyway**. One time, then it opens normally.
+Download **${DMG_NAME}** below, open it, and drag the skull onto **Applications**. The app is signed with a Developer ID and notarized by Apple, so it opens with a normal double-click — no Gatekeeper warning.
 EOF
 
 if [ -f "$WHL" ]; then
 cat >> "$NOTES_FILE" <<EOF
 
-### Option B — no app, no Gatekeeper (pipx)
+### Option B — no app (pipx)
 
-A pip install is not a quarantined app, so there is never a warning:
+Best for CLI/server use:
 
 \`\`\`bash
 pipx install "misanthropic[app] @ ${WHL_URL}"
