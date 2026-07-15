@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api, useData } from './api'
+import { initTheme, setTheme } from './theme.js'
 import { Dot, ToastHost, useToast } from './components.jsx'
 import { Overview } from './pages/overview.jsx'
 import { Requests } from './pages/requests.jsx'
@@ -51,9 +52,7 @@ function CommandPalette({ open, onClose, go }) {
       {
         label: 'Toggle light/dark',
         run: () => {
-          const el = document.documentElement
-          const light = el.classList.toggle('light')
-          localStorage.setItem('theme', light ? 'light' : 'dark')
+          setTheme(document.documentElement.classList.contains('light') ? 'dark' : 'light')
         },
       },
     ],
@@ -106,7 +105,7 @@ export function App() {
   const { data: health } = useData(api.health, [], ['request', 'state'])
 
   useEffect(() => {
-    if (localStorage.getItem('theme') === 'light') document.documentElement.classList.add('light')
+    initTheme()
     const fn = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setPaletteOpen((v) => !v) }
     }

@@ -1,4 +1,6 @@
+import { useState } from 'preact/hooks'
 import { api, useData } from '../api'
+import { setTheme, themePref } from '../theme.js'
 import { Field, Segmented, Skeleton, useToast } from '../components.jsx'
 
 function Row({ title, hint, children }) {
@@ -16,6 +18,7 @@ function Row({ title, hint, children }) {
 export function Settings() {
   const toast = useToast()
   const { data, reload } = useData(api.settings, [], ['state'])
+  const [theme, setThemeState] = useState(themePref())
 
   const save = async (body, msg) => {
     await api.saveSettings(body)
@@ -30,6 +33,20 @@ export function Settings() {
       <h1 class="mb-5 text-[17px] font-semibold tracking-tight">Settings</h1>
 
       <div class="panel">
+        <Row
+          title="Appearance"
+          hint="System follows your Mac's light/dark setting live. Stored per browser."
+        >
+          <Segmented
+            value={theme}
+            onChange={(v) => { setTheme(v); setThemeState(v); toast(`Appearance: ${v}`) }}
+            options={[
+              { value: 'system', label: 'System' },
+              { value: 'light', label: 'Light' },
+              { value: 'dark', label: 'Dark' },
+            ]}
+          />
+        </Row>
         <Row
           title="Default model"
           hint="Used when a request doesn't name one, and as the fallback for unknown model ids."

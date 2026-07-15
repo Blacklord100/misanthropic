@@ -7,6 +7,11 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.1.4 — 2026-07-17
+- **Day mode.** New Appearance picker in Settings — System / Light / Dark.
+  "System" follows your Mac's setting live; the choice is remembered per
+  browser. (Light mode existed but was hidden in the ⌘K palette.)
+
 ## v1.1.3 — 2026-07-17
 - **Fix: the app reliably relaunches after a self-update.** The relauncher now
   waits for the old instance to fully exit before opening the new one; a fixed
