@@ -393,9 +393,12 @@ class Handler(BaseHTTPRequestHandler):
             "default_model": claude_mod.DEFAULT_MODEL,
             "base_url": f"http://{self.headers.get('Host') or '127.0.0.1:8787'}",
             # First run = the wizard hasn't completed and nothing has ever
-            # happened here. Creating a key or serving a request also clears it.
+            # happened here. Keys, request history, or a savings tally from a
+            # pre-1.1 install (history.db didn't exist yet) all clear it —
+            # upgraders are not new users.
             "first_run": (not settings.get("onboarded")
-                          and not keys and history.count() == 0),
+                          and not keys and history.count() == 0
+                          and savings.summary().get("all_time_requests", 0) == 0),
         }
 
     def do_POST(self):
