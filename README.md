@@ -8,7 +8,7 @@
 The Anthropic Messages API, conjured out of your own Claude Code login —
 no API key, no per-token bill, no call to anyone's server but your own.
 
-**[⬇ Download for macOS](https://github.com/Blacklord100/misanthropic/releases/latest)** · [Install](#install) · [Quick start](#quick-start) · [Tips & tricks](#tips--tricks)
+**[⬇ Download for macOS](https://github.com/Blacklord100/misanthropic/releases/latest)** · [Install](#install) · [Quick start](#quick-start) · [Tips & tricks](#tips--tricks) · [☕ Buy me a coffee](https://paypal.me/Blacklord100)
 
 *For personal use only — don't stand it up as a shared server. v1.0.1 · [CHANGELOG](CHANGELOG.md) · formerly Breakthrough.*
 

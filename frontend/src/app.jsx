@@ -162,6 +162,15 @@ export function App() {
             Search… <span class="kbd ml-auto">⌘K</span>
           </button>
           <div class="mt-auto flex flex-col gap-2 px-2">
+            <a
+              href="https://paypal.me/Blacklord100"
+              target="_blank"
+              rel="noreferrer"
+              class="flex items-center gap-2 rounded-md py-1 text-[11.5px] text-faint transition-colors hover:text-ink"
+              title="If Misanthropic saves you money, buy Mithuran a coffee"
+            >
+              ☕ Buy me a coffee
+            </a>
             <div class="flex items-center gap-2 text-[11.5px] text-mute">
               <Dot tone={STATUS_TONE[claudeStatus] || 'idle'} />
               {STATUS_TEXT[claudeStatus] || 'Checking…'}

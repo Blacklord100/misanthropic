@@ -38,6 +38,20 @@ export function Overview() {
               <div class="mt-2 text-[12.5px] text-mute">
                 Misanthropic charged <span class="font-medium text-ink">$0.00</span>
                 {savings.since && <> · since {new Date(savings.since).toLocaleDateString()}</>}
+                {savings.all_time_usd >= 1 && (
+                  <>
+                    {' · '}
+                    <a
+                      href="https://paypal.me/Blacklord100"
+                      target="_blank"
+                      rel="noreferrer"
+                      class="transition-colors hover:text-ink"
+                      style={{ color: 'var(--color-accent-ink)' }}
+                    >
+                      send a coffee's worth? ☕
+                    </a>
+                  </>
+                )}
               </div>
             </div>
             <div class="flex gap-10 pb-1">

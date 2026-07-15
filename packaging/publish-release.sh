@@ -88,6 +88,10 @@ cat >> "$NOTES_FILE" <<EOF
 ---
 
 ${CHANGE}
+
+---
+
+*Misanthropic saves you the hosted-API bill. If it's earned it:* [**☕ buy me a coffee**](https://paypal.me/Blacklord100)
 EOF
 
 echo "==> Publishing $TAG to: $REPO"

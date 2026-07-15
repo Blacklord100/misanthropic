@@ -139,6 +139,8 @@ def main():
                 None,
                 self.login_item,
                 None,
+                rumps.MenuItem("Buy me a coffee ☕", callback=lambda _:
+                               webbrowser.open("https://paypal.me/Blacklord100")),
                 rumps.MenuItem("Quit", callback=self.quit),
             ]
             settings.apply_startup()
