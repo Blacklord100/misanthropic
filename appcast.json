@@ -1,8 +1,8 @@
 {
-  "version": "1.1.3",
-  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.1.3",
-  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.1.3/Misanthropic-1.1.3.dmg",
-  "sha256": "3d73f528c7ffd63e1c2d76c48b9973cdc7dbdca83b806d43108ea846f4f65548",
-  "notes": "- **Fix: the app reliably relaunches after a self-update.** The relauncher now\n  waits for the old instance to fully exit before opening the new one; a fixed\n  1-second delay could lose the race and leave the app closed. (Updating *to*\n  this version still runs the old relauncher \u2014 if the app doesn't come back,\n  reopen it once; every update after that relaunches itself.)\n- **Fix: \"Check for Updates\" is never stale.** The appcast is fetched through\n  GitHub's uncached contents API (raw CDN as fa",
+  "version": "1.1.4",
+  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.1.4",
+  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.1.4/Misanthropic-1.1.4.dmg",
+  "sha256": "43f7b708639cf99bf07813cd5a8536c99e3e689ed96000581a7ba529f8f96406",
+  "notes": "- **Day mode.** New Appearance picker in Settings \u2014 System / Light / Dark.\n  \"System\" follows your Mac's setting live; the choice is remembered per\n  browser. (Light mode existed but was hidden in the \u2318K palette.)",
   "min_macos": "11.0"
 }
