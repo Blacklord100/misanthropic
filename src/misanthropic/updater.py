@@ -254,11 +254,17 @@ def download_and_install(info, progress=None):
             subprocess.run(["hdiutil", "detach", str(mnt), "-quiet"], check=False)
 
         report("Relaunching…")
-        # Delay the open until after the caller has quit — `open` on an app
-        # that's still running would just focus the dying instance.
-        subprocess.Popen(["/bin/sh", "-c",
-                          f'sleep 1; /usr/bin/open "{bundle}"'],
-                         start_new_session=True)
+        # The relauncher must wait for THIS process to actually exit: `open`
+        # on an app whose old instance is still quitting merely activates the
+        # dying process (same bundle id) and launches nothing. Poll our pid
+        # until it's gone (cap 30s — open anyway as a last resort), then open.
+        pid = os.getpid()
+        script = (
+            f'n=0; while kill -0 {pid} 2>/dev/null && [ $n -lt 60 ]; '
+            f'do sleep 0.5; n=$((n+1)); done; '
+            f'sleep 0.5; /usr/bin/open "{bundle}"'
+        )
+        subprocess.Popen(["/bin/sh", "-c", script], start_new_session=True)
         return None
     except Exception as e:
         return f"update failed: {e}"

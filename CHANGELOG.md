@@ -7,6 +7,16 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.1.3 — 2026-07-17
+- **Fix: the app reliably relaunches after a self-update.** The relauncher now
+  waits for the old instance to fully exit before opening the new one; a fixed
+  1-second delay could lose the race and leave the app closed. (Updating *to*
+  this version still runs the old relauncher — if the app doesn't come back,
+  reopen it once; every update after that relaunches itself.)
+- **Fix: "Check for Updates" is never stale.** The appcast is fetched through
+  GitHub's uncached contents API (raw CDN as fallback), so a check made
+  seconds after a release sees it.
+
 ## v1.1.2 — 2026-07-17
 - **Concurrency is now a setting.** Change the parallel-Claude-process cap
   live from Settings (2/4/8/16) — applies immediately, persists across

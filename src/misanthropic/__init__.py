@@ -7,4 +7,4 @@ every request is fulfilled by shelling out to the `claude` binary you already ha
 logged in. Your subscription IS the auth.
 """
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
