@@ -35,6 +35,11 @@ APPCAST_URL = os.environ.get(
     "MISANTHROPIC_APPCAST_URL",
     "https://raw.githubusercontent.com/Blacklord100/misanthropic/master/appcast.json",
 )
+# Preferred source: the contents API is not CDN-cached, so a check run right
+# after a release sees it immediately (raw.githubusercontent lags ~5 min, and
+# query strings do NOT bust its cache). Unauthenticated limit is 60 req/h —
+# orders of magnitude above the 6-hourly check. raw stays as the fallback.
+APPCAST_API_URL = "https://api.github.com/repos/Blacklord100/misanthropic/contents/appcast.json"
 STATE_FILE = CONFIG_DIR / "updater.json"
 _TIMEOUT_S = 6
 
@@ -65,27 +70,29 @@ def is_newer(remote, current):
 
 # ---- feed fetch -------------------------------------------------------------
 
-def _fetch_json(url, timeout=_TIMEOUT_S):
-    """GET the appcast and parse it. Returns a dict, or None on any failure.
-
-    A time-bucketed cache-buster is appended: raw.githubusercontent.com's CDN
-    caches ~5 minutes per URL (query string included in the cache key), which
-    otherwise makes "Check for Updates" report stale news right after a
-    release. Bucketing to 60s keeps the CDN mostly warm while capping staleness
-    at a minute."""
+def _fetch_json(url, timeout=_TIMEOUT_S, headers=None):
+    """GET the appcast and parse it. Returns a dict, or None on any failure."""
     try:
-        import time as _time
-        if "://" in url and "?" not in url:
-            url = f"{url}?t={int(_time.time() // 60)}"
-        req = urllib.request.Request(
-            url, headers={"User-Agent": f"misanthropic/{__version__}"}
-        )
+        h = {"User-Agent": f"misanthropic/{__version__}"}
+        h.update(headers or {})
+        req = urllib.request.Request(url, headers=h)
         ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def _fetch_appcast(url=None):
+    """Freshest available appcast. An explicit/env override is used verbatim
+    (tests point this at file:// manifests); the default source tries the
+    uncached contents API first, then the CDN-cached raw URL."""
+    override = url or os.environ.get("MISANTHROPIC_APPCAST_URL")
+    if override:
+        return _fetch_json(override)
+    return (_fetch_json(APPCAST_API_URL, headers={"Accept": "application/vnd.github.raw"})
+            or _fetch_json(APPCAST_URL))
 
 
 # ---- persisted prefs (~/.misanthropic/updater.json) -------------------------
@@ -269,7 +276,7 @@ def check_for_update(current=None, url=None, respect_skip=True):
     still surfaces a version the user previously chose to skip.
     """
     current = current or __version__
-    data = _fetch_json(url or APPCAST_URL)
+    data = _fetch_appcast(url)
     if not data:
         return None
     remote = data.get("version")
