@@ -16,11 +16,22 @@ import webbrowser
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from . import __version__, claude, server, sessions, updater
+from . import __version__, claude, doctor, server, sessions, settings, updater
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8787"))
 BASE_URL = f"http://{HOST}:{PORT}"
+
+# Menu status line per doctor status. The app NEVER refuses to start: a broken
+# environment shows amber/red here and a fix-it screen in the dashboard.
+STATUS_LINES = {
+    "ok":            "🟢 Serving on {base}",
+    "unknown":       "🟢 Serving on {base}",
+    "no_binary":     "🟠 Claude CLI not found — open dashboard to fix",
+    "not_logged_in": "🔴 Claude CLI not logged in — open dashboard to fix",
+    "error":         "🟠 Last check failed — open dashboard for details",
+    "stopped":       "⚪ Server stopped",
+}
 
 LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.misanthropic.app.plist"
 ICON_PATH = Path(__file__).parent / "resources" / "menubar.png"
@@ -97,6 +108,9 @@ def main():
                 super().__init__("☠ MA", quit_button=None)
             self.httpd = None
             self.thread = None
+            # Status line first: always visible, never a dead-end. Clicking it
+            # opens the dashboard (which renders the matching fix-it screen).
+            self.status_item = rumps.MenuItem("…", callback=self.open_dashboard)
             self.toggle_item = rumps.MenuItem("Stop server", callback=self.toggle)
             # Checked = force web on for every request; unchecked = "auto", where
             # each request decides for itself via the web_search tool (faithful to
@@ -113,6 +127,8 @@ def main():
             self.autocheck_item = rumps.MenuItem("Auto-check for updates", callback=self.toggle_autocheck)
             self.autocheck_item.state = updater.auto_check_enabled()
             self.menu = [
+                self.status_item,
+                None,
                 self.toggle_item,
                 self.web_item,
                 rumps.MenuItem("Open dashboard", callback=self.open_dashboard),
@@ -125,21 +141,46 @@ def main():
                 None,
                 rumps.MenuItem("Quit", callback=self.quit),
             ]
-            if not _claude_ready():
-                rumps.alert(
-                    "Claude Code not found",
-                    "Misanthropic needs the `claude` CLI installed and logged in. "
-                    "Install Claude Code, then restart this app.",
-                )
+            settings.apply_startup()
+            # The app starts no matter what. A missing/logged-out CLI is a
+            # status, not a fatal error — the dashboard walks the user through
+            # fixing it, and the health loop notices when it's fixed.
             self.start_server()
-            # A cheap drain timer applies update-check results on the main thread
-            # (rumps UI is main-thread only); a slow timer triggers periodic checks.
+            self._doctor_status = None
+            self._apply_status("unknown" if _claude_ready() else "no_binary")
+            # A cheap drain timer applies worker-thread results on the main
+            # thread (rumps UI is main-thread only); slow timers drive periodic
+            # update checks and the environment health loop.
             self._drain_timer = rumps.Timer(self._drain_update_result, 2)
             self._drain_timer.start()
             self._autocheck_timer = rumps.Timer(self._autocheck_tick, 6 * 3600)
             self._autocheck_timer.start()
+            self._health_timer = rumps.Timer(self._health_tick, 300)
+            self._health_timer.start()
+            self._spawn_health_check()
             if updater.auto_check_enabled():
                 self._spawn_update_check(manual=False)
+
+        # ---- environment health loop ----
+        def _apply_status(self, status):
+            self._doctor_status = status
+            line = STATUS_LINES.get(status) or STATUS_LINES["error"]
+            self.status_item.title = line.format(base=f"{HOST}:{PORT}")
+
+        def _spawn_health_check(self):
+            """Re-diagnose off the main thread; the drain timer applies it.
+            Catches 'CLI moved after an update' and 'logged out mid-day' before
+            a user request has to fail to reveal it."""
+            def work():
+                if not claude.claude_available():
+                    claude.reset_resolution()  # maybe it moved — rediscover
+                snap = doctor.snapshot()
+                self._health_result = snap["status"]
+            self._health_result = None
+            threading.Thread(target=work, daemon=True).start()
+
+        def _health_tick(self, _):
+            self._spawn_health_check()
 
         # ---- server lifecycle ----
         def start_server(self):
@@ -149,6 +190,9 @@ def main():
             self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
             self.thread.start()
             self.toggle_item.title = "Stop server"
+            if getattr(self, "_doctor_status", None) == "stopped":
+                self._apply_status("unknown")
+                self._spawn_health_check()
 
         def stop_server(self):
             if not self.httpd:
@@ -158,6 +202,7 @@ def main():
             self.httpd = None
             self.thread = None
             self.toggle_item.title = "Start server"
+            self._apply_status("stopped")
 
         def toggle(self, _):
             self.stop_server() if self.httpd else self.start_server()
@@ -210,6 +255,12 @@ def main():
                 self._spawn_update_check(manual=False)
 
         def _drain_update_result(self, _):
+            # Health verdicts ride the same main-thread drain as update checks.
+            health = getattr(self, "_health_result", None)
+            if health is not None:
+                self._health_result = None
+                if self.httpd:  # don't overwrite the explicit "stopped" state
+                    self._apply_status(health)
             result = self._update_result
             if result is None:
                 return
@@ -238,20 +289,47 @@ def main():
             message = f"Misanthropic v{version} is available."
             if notes:
                 message += "\n\n" + notes
+            in_place = updater.can_install_in_place() and info.get("sha256") and info.get("dmg_url")
             # rumps.alert -> legacy NSAlert returns: ok=1, cancel=0, other=-1.
             resp = rumps.alert(
                 title="Update available",
                 message=message,
-                ok="Download",
+                ok="Install & Relaunch" if in_place else "Download",
                 cancel="Later",
                 other="Skip This Version",
             )
-            if resp == 1 and self._update_url:
-                webbrowser.open(self._update_url)
+            if resp == 1:
+                if in_place:
+                    self._install_update(info)
+                elif self._update_url:
+                    webbrowser.open(self._update_url)
             elif resp == -1:
                 updater.mark_skipped(version)
                 self.update_item.title = "Check for Updates…"
                 self._update_url = None
+
+        def _install_update(self, info):
+            """Sparkle-style in-place update: download, verify sha256, swap the
+            bundle, relaunch. Runs off the main thread; the menu shows progress."""
+            def work():
+                err = updater.download_and_install(
+                    info, progress=lambda m: setattr(self.update_item, "title", m))
+                self._install_error = err
+                self._install_done = err is None
+            self._install_error = None
+            self._install_done = False
+            self.update_item.title = "Downloading update…"
+            def watch(_):
+                if getattr(self, "_install_done", False):
+                    self._watch_timer.stop()
+                    self.quit(None)  # the new instance opens itself
+                elif getattr(self, "_install_error", None):
+                    self._watch_timer.stop()
+                    self.update_item.title = "Check for Updates…"
+                    rumps.alert("Update failed", self._install_error)
+            self._watch_timer = rumps.Timer(watch, 1)
+            self._watch_timer.start()
+            threading.Thread(target=work, daemon=True).start()
 
         def toggle_login(self, sender):
             if sender.state:

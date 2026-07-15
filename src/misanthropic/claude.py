@@ -127,6 +127,7 @@ _COMMON_CLAUDE_PATHS = (
     "~/bin/claude",
 )
 _resolved_claude = None
+_resolved_source = None  # how the binary was found — surfaced by the doctor
 
 
 def claude_bin():
@@ -137,13 +138,17 @@ def claude_bin():
     The first success is cached. Falls back to the bare name "claude" (the spawn
     then raises a clear ClaudeError) when nothing is found.
     """
-    global _resolved_claude
+    global _resolved_claude, _resolved_source
     if CLAUDE_BIN:
+        _resolved_source = "env:CLAUDE_BIN"
         return CLAUDE_BIN
     if _resolved_claude:
         return _resolved_claude
 
+    source = None
     found = shutil.which("claude")
+    if found:
+        source = "PATH"
     if not found:
         shell = os.environ.get("SHELL", "/bin/zsh")
         try:
@@ -153,6 +158,7 @@ def claude_bin():
                 cand = os.path.expanduser(line.strip())
                 if cand and os.path.exists(cand):
                     found = cand
+                    source = "login shell"
                     break
         except Exception:
             pass
@@ -161,11 +167,26 @@ def claude_bin():
             cand = os.path.expanduser(cand)
             if os.path.exists(cand):
                 found = cand
+                source = "known location"
                 break
 
     if found:
         _resolved_claude = found
+        _resolved_source = source
     return found or "claude"
+
+
+def resolution_source():
+    """How claude_bin() found the binary ('PATH', 'login shell', ...), or None."""
+    return _resolved_source
+
+
+def reset_resolution():
+    """Drop the cached binary path so the next claude_bin() re-runs discovery —
+    used by the doctor's re-scan when the CLI moved (e.g. after an update)."""
+    global _resolved_claude, _resolved_source
+    _resolved_claude = None
+    _resolved_source = None
 
 
 def claude_available():

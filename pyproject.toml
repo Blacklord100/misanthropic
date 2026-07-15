@@ -23,7 +23,7 @@ dependencies = []
 # The core (server + CLI) has zero runtime deps. The menu-bar app adds rumps.
 [project.optional-dependencies]
 app = ["rumps>=0.4"]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "anthropic>=0.40"]  # anthropic: SDK contract tests
 
 [project.scripts]
 misanthropic = "misanthropic.cli:main"

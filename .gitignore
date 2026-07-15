@@ -23,3 +23,7 @@ env/
 .env.local
 *.log
 .claude/
+
+# frontend
+frontend/node_modules/
+.gstack/

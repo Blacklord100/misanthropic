@@ -287,9 +287,14 @@ never point their machines at yours.
 ## Build & release (maintainers)
 
 ```bash
+cd frontend && npm install && npm run build && cd ..   # dashboard -> src/misanthropic/static (checked in)
 bash packaging/release.sh             # build app + styled .dmg into dist/
 bash packaging/release.sh --publish   # ...then cut the GitHub release + update feed
 ```
+
+The dashboard is a Preact + Tailwind app in `frontend/`; its compiled output is
+committed under `src/misanthropic/static/` so pip/pipx/.app installs never need
+Node. Rebuild it whenever you touch `frontend/`.
 
 The `.dmg` is a styled drag-to-Applications installer with the generated skull icon.
 Release builds are signed with a Developer ID and notarized

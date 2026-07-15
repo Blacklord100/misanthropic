@@ -22,16 +22,52 @@ Stdlib only — no web framework. ThreadingHTTPServer handles concurrent clients
 """
 
 import json
+import mimetypes
 import os
+import queue
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
-from . import __version__, dashboard, request_log, savings, sessions, translate
-from .claude import ClaudeError, DEFAULT_MODEL, resolve_web, run_blocking, run_web, stream_events, web_policy
+from . import (__version__, dashboard, doctor, history, request_log, savings,
+               sessions, settings, translate)
+from . import claude as claude_mod
+from .claude import ClaudeError, resolve_web, run_blocking, run_web, stream_events, web_policy
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
 API_KEY = os.environ.get("MISANTHROPIC_API_KEY")
+
+# Compiled dashboard assets (see frontend/). When present they are served at /;
+# the legacy self-contained page in dashboard.py remains the fallback so a
+# source checkout without a frontend build still gets a working UI.
+STATIC_DIR = Path(__file__).parent / "static"
+
+# ---- concurrency governor ----------------------------------------------------
+#
+# Every request spawns a full `claude` process (a node app), so unbounded
+# concurrency means a request burst forks a process storm. Cap concurrent CLI
+# runs; a request that can't get a slot within the queue window is refused with
+# the API's own 529 overloaded_error, which official SDKs back off and retry —
+# exactly the hosted API's behavior under load.
+MAX_CONCURRENCY = max(1, int(os.environ.get("MISANTHROPIC_MAX_CONCURRENCY", "4")))
+QUEUE_WAIT_S = float(os.environ.get("MISANTHROPIC_QUEUE_WAIT_MS", "30000")) / 1000.0
+_governor = threading.BoundedSemaphore(MAX_CONCURRENCY)
+
+
+def classify_claude_error(message):
+    """Map a CLI failure onto the hosted API's error taxonomy, so SDK retry
+    logic behaves identically to api.anthropic.com."""
+    m = (message or "").lower()
+    if doctor.login_looks_like_auth_error(m):
+        return 401, "authentication_error"
+    if any(s in m for s in ("rate limit", "overloaded", "usage limit", "429", "529",
+                            "too many requests", "capacity")):
+        return 529, "overloaded_error"
+    if "timed out" in m:
+        return 504, "api_error"
+    return 500, "api_error"
 
 
 def _request_wants_web(body):
@@ -128,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
         self._log_rec = {
             "ts": time.time(),
             "key_label": self._key_label(key) if linked else "stateless",
-            "model": body.get("model") or DEFAULT_MODEL,
+            "model": body.get("model") or claude_mod.DEFAULT_MODEL,
             "mode": self._request_mode(linked, web),
             "stream": bool(body.get("stream")),
             "prompt_text": self._last_user_text(body),
@@ -171,6 +207,7 @@ class Handler(BaseHTTPRequestHandler):
         if error_msg:
             rec["error"] = str(error_msg)[:MAX_LOG_TEXT]
         request_log.append(rec)
+        history.append(rec)  # durable copy + SSE change notification
         # Tally the hosted-API price we dodged — successful generations only.
         if status == 200:
             try:
@@ -211,42 +248,148 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- routes -------------------------------------------------------------
 
+    def _query(self):
+        from urllib.parse import parse_qs, urlsplit
+        q = parse_qs(urlsplit(self.path).query)
+        return {k: v[0] for k, v in q.items() if v}
+
+    def _send_static(self, rel):
+        """Serve a compiled dashboard asset. Path is resolved and must stay
+        inside STATIC_DIR (no traversal)."""
+        target = (STATIC_DIR / rel.lstrip("/")).resolve()
+        try:
+            target.relative_to(STATIC_DIR.resolve())
+        except ValueError:
+            return self._send_error(404, "not_found_error", "Not found.")
+        if target.is_dir():
+            target = target / "index.html"
+        if not target.is_file():
+            # SPA fallback: unknown non-asset paths get index.html so hash-less
+            # deep links still land in the app.
+            index = STATIC_DIR / "index.html"
+            if not index.is_file():
+                return self._send_error(404, "not_found_error", "Not found.")
+            target = index
+        data = target.read_bytes()
+        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        if "/assets/" in str(target):
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/":
+            if (STATIC_DIR / "index.html").is_file():
+                return self._send_static("index.html")
             return self._send_html(dashboard.PAGE)
         if path == "/health":
+            snap = doctor.snapshot()
             return self._send_json(200, {
                 "status": "ok",
                 "service": "misanthropic",
                 "version": __version__,
                 "backend": "claude-code-cli",
                 "mode": "session" if sessions.session_mode_enabled() else "stateless",
+                "claude": snap["status"],
             })
-        if path == "/admin/state":
+        if path.startswith("/admin/"):
             if not self._is_local():
                 return self._send_error(403, "permission_error", "Admin API is local-only.")
-            return self._send_json(200, self._admin_state())
-        if path == "/admin/requests":
-            if not self._is_local():
-                return self._send_error(403, "permission_error", "Admin API is local-only.")
-            return self._send_json(200, {"requests": request_log.recent(),
-                                          "savings": savings.summary()})
+            if path == "/admin/state":
+                return self._send_json(200, self._admin_state())
+            if path == "/admin/requests":
+                q = self._query()
+                rows = history.recent(
+                    limit=int(q.get("limit", 50)),
+                    before_id=int(q["before_id"]) if q.get("before_id") else None,
+                    key_label=q.get("key"), model=q.get("model"),
+                    status=q.get("status"), q=q.get("q"),
+                )
+                return self._send_json(200, {"requests": rows,
+                                              "total": history.count(),
+                                              "savings": savings.summary()})
+            if path == "/admin/requests/live":
+                # The legacy in-memory ring still sees in-flight/most-recent
+                # entries first; useful for the live feed's optimistic rows.
+                return self._send_json(200, {"requests": request_log.recent()})
+            if path == "/admin/series":
+                days = int(self._query().get("days", 30))
+                return self._send_json(200, {"series": history.daily_series(days)})
+            if path == "/admin/doctor":
+                probe = self._query().get("probe") in ("1", "true")
+                return self._send_json(200, doctor.snapshot(probe=probe))
+            if path == "/admin/settings":
+                return self._send_json(200, {
+                    "settings": settings.load(),
+                    "web_policy": web_policy(),
+                    "default_model": claude_mod.DEFAULT_MODEL,
+                    "max_concurrency": MAX_CONCURRENCY,
+                })
+            if path == "/admin/events":
+                return self._stream_admin_events()
+            return self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
+        if path.startswith("/assets/") or path in ("/favicon.svg", "/favicon.ico"):
+            return self._send_static(path)
         self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
+
+    def _stream_admin_events(self):
+        """SSE change feed for the dashboard: request completions and state
+        changes push instantly; a heartbeat comment every 15s keeps proxies and
+        EventSource happy. The client re-fetches on each event."""
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        sub = history.subscribe()
+        try:
+            self.wfile.write(b"event: hello\ndata: {}\n\n")
+            self.wfile.flush()
+            while True:
+                try:
+                    item = sub.get(timeout=15)
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    continue
+                chunk = f"event: {item['event']}\ndata: {json.dumps(item['data'])}\n\n"
+                self.wfile.write(chunk.encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client closed the tab
+        finally:
+            history.unsubscribe(sub)
 
     def _admin_state(self):
         detail = sessions.keys_detail()
         sess = sessions.all_sessions()
+        stats = history.key_stats()
         keys = [{
             "key": k,
             "label": meta.get("label", ""),
             "created": meta.get("created", ""),
             "turns": sess.get(k, {}).get("turns", 0),
+            "requests": stats.get(meta.get("label", ""), {}).get("requests", 0),
+            "usd": stats.get(meta.get("label", ""), {}).get("usd", 0.0),
         } for k, meta in detail.items()]
         return {
             "mode": "session" if sessions.session_mode_enabled() else "stateless",
             "version": __version__,
             "keys": keys,
+            "web_policy": web_policy(),
+            "default_model": claude_mod.DEFAULT_MODEL,
+            "base_url": f"http://{self.headers.get('Host') or '127.0.0.1:8787'}",
+            # First run = the wizard hasn't completed and nothing has ever
+            # happened here. Creating a key or serving a request also clears it.
+            "first_run": (not settings.get("onboarded")
+                          and not keys and history.count() == 0),
         }
 
     def do_POST(self):
@@ -262,13 +405,35 @@ class Handler(BaseHTTPRequestHandler):
                 body = {}
             if path == "/admin/keys":
                 key = sessions.create_key(str(body.get("label", "")).strip())
+                history.notify("state")
                 return self._send_json(200, {"key": key})
             if path == "/admin/keys/delete":
                 sessions.remove_key(str(body.get("key", "")))
+                history.notify("state")
                 return self._send_json(200, {"ok": True})
             if path == "/admin/sessions/forget":
                 sessions.forget_session(str(body.get("key", "")))
+                history.notify("state")
                 return self._send_json(200, {"ok": True})
+            if path == "/admin/doctor/rescan":
+                return self._send_json(200, doctor.rescan())
+            if path == "/admin/doctor/probe":
+                # The wizard's "verify login" button: force a fresh probe.
+                doctor.probe_login(force=True)
+                return self._send_json(200, doctor.snapshot())
+            if path == "/admin/settings":
+                new = settings.update(body if isinstance(body, dict) else {})
+                if "web_policy" in new and new["web_policy"] in ("auto", "on", "off"):
+                    try:
+                        claude_mod.set_web_policy(new["web_policy"])
+                    except ValueError:
+                        pass
+                if body.get("default_model"):
+                    claude_mod.DEFAULT_MODEL = str(body["default_model"])
+                history.notify("state")
+                return self._send_json(200, {"settings": new,
+                                              "web_policy": web_policy(),
+                                              "default_model": claude_mod.DEFAULT_MODEL})
             return self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
 
         # Auth differs by mode. In session mode the key must be approved; in
@@ -298,7 +463,7 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(messages, list) or not messages:
             return self._send_error(400, "invalid_request_error", "`messages` must be a non-empty array.")
 
-        model = body.get("model") or DEFAULT_MODEL
+        model = body.get("model") or claude_mod.DEFAULT_MODEL
         system = translate.extract_system(body)
         # build_cli_input picks the wire format: plain text by default, or
         # stream-json (Anthropic content blocks) when the request carries images.
@@ -313,24 +478,36 @@ class Handler(BaseHTTPRequestHandler):
         # paths' end-of-emit hooks. Visible at GET /admin/requests.
         self._log_start(body, key, linked, use_web)
 
-        # Web mode runs the agentic loop and reshapes its tool blocks into the
-        # API's `web_search` content. Both stream and non-stream go through it.
-        if use_web:
-            if body.get("stream"):
-                return self._stream_web(prompt, model, system, key if linked else None, input_format)
-            return self._blocking_web(prompt, model, system, key if linked else None, input_format)
-
-        if body.get("stream"):
-            return self._stream_messages(prompt, model, system, key if linked else None, input_format)
-
-        if linked:
-            return self._blocking_session(prompt, model, system, key, input_format)
-
+        # Take a CLI slot (or refuse with the API's own overload signal, which
+        # SDKs retry with backoff). Held for the full run, streaming included.
+        if not _governor.acquire(timeout=QUEUE_WAIT_S):
+            return self._send_error(529, "overloaded_error",
+                                    "Local server is at capacity; retry shortly.")
         try:
-            wrapper = run_blocking(prompt, model=model, system=system, input_format=input_format)
-        except ClaudeError as e:
-            return self._send_error(500, "api_error", str(e))
-        self._send_json(200, translate.wrapper_to_message(wrapper, model))
+            # Web mode runs the agentic loop and reshapes its tool blocks into
+            # the API's `web_search` content. Stream and non-stream both use it.
+            if use_web:
+                if body.get("stream"):
+                    return self._stream_web(prompt, model, system, key if linked else None, input_format)
+                return self._blocking_web(prompt, model, system, key if linked else None, input_format)
+
+            if body.get("stream"):
+                return self._stream_messages(prompt, model, system, key if linked else None, input_format)
+
+            if linked:
+                return self._blocking_session(prompt, model, system, key, input_format)
+
+            try:
+                wrapper = run_blocking(prompt, model=model, system=system, input_format=input_format)
+            except ClaudeError as e:
+                return self._send_claude_error(e)
+            self._send_json(200, translate.wrapper_to_message(wrapper, model))
+        finally:
+            _governor.release()
+
+    def _send_claude_error(self, e):
+        status, etype = classify_claude_error(str(e))
+        return self._send_error(status, etype, str(e))
 
     # ---- web search (opt-in) ------------------------------------------------
 
@@ -369,7 +546,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             blocks, wrapper = self._run_web_linked(prompt, model, system, key, input_format)
         except ClaudeError as e:
-            return self._send_error(500, "api_error", str(e))
+            return self._send_claude_error(e)
         self._send_json(200, translate.web_message(blocks, wrapper, model))
 
     def _stream_web(self, prompt, model, system, key, input_format="text"):
@@ -379,7 +556,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             blocks, wrapper = self._run_web_linked(prompt, model, system, key, input_format)
         except ClaudeError as e:
-            return self._send_error(500, "api_error", str(e))
+            return self._send_claude_error(e)
 
         self.close_connection = True
         self.send_response(200)
@@ -436,14 +613,14 @@ class Handler(BaseHTTPRequestHandler):
                 # Only start over if the session id is genuinely bad — a transient
                 # error (rate limit, backend hiccup) must NOT destroy the link.
                 if not resume_id or not _is_invalid_session_error(str(e)):
-                    return self._send_error(500, "api_error", str(e))
+                    return self._send_claude_error(e)
                 sessions.forget_session(key)
                 try:
                     wrapper = run_blocking(prompt, model=model, system=system,
                                            resume=None, persist=True, cwd=cwd,
                                            input_format=input_format)
                 except ClaudeError as e2:
-                    return self._send_error(500, "api_error", str(e2))
+                    return self._send_claude_error(e2)
             sid = wrapper.get("session_id")
             if sid:
                 sessions.record_session(key, sid)
@@ -527,6 +704,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_httpd(host="127.0.0.1", port=8787):
     """Create (but don't start) the server — lets the menu-bar app supervise it."""
+    settings.apply_startup()
+    pruned = history.prune(settings.get("retention_days"))
+    if pruned:
+        print(f"  history: pruned {pruned} entries past retention", file=sys.stderr)
     return ThreadingHTTPServer((host, port), Handler)
 
 

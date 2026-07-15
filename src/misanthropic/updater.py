@@ -128,6 +128,115 @@ def mark_notified(version):
     _save_state(s)
 
 
+# ---- in-place install ---------------------------------------------------------
+#
+# Builds are Developer ID-signed and notarized (v1.0.1+), so a downloaded app
+# passes Gatekeeper and we can swap the bundle Sparkle-style instead of just
+# opening the release page. Only attempted when running frozen inside a .app;
+# a pip/pipx install updates through pip, not here.
+
+def _running_bundle():
+    import sys
+    from pathlib import Path
+    if not getattr(sys, "frozen", False):
+        return None
+    for parent in Path(sys.executable).resolve().parents:
+        if parent.suffix == ".app":
+            return parent
+    return None
+
+
+def can_install_in_place():
+    return _running_bundle() is not None
+
+
+def download_and_install(info, progress=None):
+    """Download the release DMG, verify its sha256, replace the running bundle,
+    and relaunch. Returns an error string on failure, None on success (at which
+    point a new instance is launching and the caller should quit).
+
+    Every step is verified before anything is touched: the swap happens only
+    after the checksum matches and the mounted DMG contains a .app.
+    """
+    import hashlib
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    def report(msg):
+        if progress:
+            try:
+                progress(msg)
+            except Exception:
+                pass
+
+    bundle = _running_bundle()
+    if bundle is None:
+        return "not running from a .app bundle"
+    url = info.get("dmg_url")
+    expected_sha = (info.get("sha256") or "").strip().lower()
+    if not url or not expected_sha:
+        return "appcast is missing dmg_url or sha256"
+
+    tmp = Path(tempfile.mkdtemp(prefix="misanthropic-update-"))
+    dmg = tmp / "update.dmg"
+    mnt = tmp / "mnt"
+    try:
+        report("Downloading update…")
+        req = urllib.request.Request(url, headers={"User-Agent": f"misanthropic/{__version__}"})
+        ctx = ssl.create_default_context()
+        h = hashlib.sha256()
+        with urllib.request.urlopen(req, timeout=120, context=ctx) as resp, open(dmg, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                h.update(chunk)
+                f.write(chunk)
+        if h.hexdigest().lower() != expected_sha:
+            return "checksum mismatch — download discarded"
+
+        report("Installing…")
+        mnt.mkdir()
+        r = subprocess.run(["hdiutil", "attach", str(dmg), "-nobrowse", "-quiet",
+                            "-mountpoint", str(mnt)], capture_output=True, text=True)
+        if r.returncode != 0:
+            return f"could not mount update: {r.stderr.strip() or r.returncode}"
+        try:
+            apps = list(mnt.glob("*.app"))
+            if not apps:
+                return "update image contains no .app"
+            staged = bundle.with_suffix(".app.update")
+            subprocess.run(["rm", "-rf", str(staged)], check=False)
+            r = subprocess.run(["ditto", str(apps[0]), str(staged)],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                return f"copy failed: {r.stderr.strip() or r.returncode}"
+            old = bundle.with_suffix(".app.old")
+            subprocess.run(["rm", "-rf", str(old)], check=False)
+            os.rename(bundle, old)
+            try:
+                os.rename(staged, bundle)
+            except OSError:
+                os.rename(old, bundle)  # roll back — never leave no app at all
+                raise
+            subprocess.run(["rm", "-rf", str(old)], check=False)
+        finally:
+            subprocess.run(["hdiutil", "detach", str(mnt), "-quiet"], check=False)
+
+        report("Relaunching…")
+        # Delay the open until after the caller has quit — `open` on an app
+        # that's still running would just focus the dying instance.
+        subprocess.Popen(["/bin/sh", "-c",
+                          f'sleep 1; /usr/bin/open "{bundle}"'],
+                         start_new_session=True)
+        return None
+    except Exception as e:
+        return f"update failed: {e}"
+    finally:
+        subprocess.run(["rm", "-rf", str(tmp)], check=False)
+
+
 # ---- the check --------------------------------------------------------------
 
 def check_for_update(current=None, url=None, respect_skip=True):
