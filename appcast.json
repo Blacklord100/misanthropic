@@ -1,8 +1,8 @@
 {
-  "version": "1.1.0",
-  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.1.0",
-  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.1.0/Misanthropic-1.1.0.dmg",
-  "sha256": "4a2ee719fbdc5a0ea8297bee355edb4bea7f23bd82fffa3d3f8afcd48d57fad2",
-  "notes": "The best-in-class release: onboarding, a new dashboard, durable history, and\none-click over-the-air updates.\n\n- **Signed & notarized builds.** The app is now Developer ID-signed and\n  notarized by Apple \u2014 it opens with a plain double-click on any Mac, no\n  Gatekeeper warning, no `xattr` incantations.\n- **One-click updates.** When a new version ships, the app offers\n  *Install & Relaunch*: it downloads the DMG, verifies its checksum against the\n  appcast, swaps itself in place, and relaunches. (U",
+  "version": "1.1.1",
+  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.1.1",
+  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.1.1/Misanthropic-1.1.1.dmg",
+  "sha256": "b16730b94d674f1bed452bdaebcddc26f6e57b1fc37f6a150d6ec0a11925f860",
+  "notes": "Updates now update themselves.\n\n- **One-click updates from the menu bar.** When a new version is available the\n  menu item reads *Install vX & Relaunch* and clicking it does everything \u2014\n  download, checksum verify, swap, relaunch. No browser, no DMG, no drag.\n- **Automatic updates** (new toggle, on by default). The periodic check\n  installs new releases silently and relaunches \u2014 but only when no request is\n  in flight, so a running generation is never cut off. Turn it off in the menu\n  if you'd",
   "min_macos": "11.0"
 }
