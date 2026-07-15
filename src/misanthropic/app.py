@@ -119,13 +119,21 @@ def main():
             self.web_item.state = (claude.web_policy() == "on")
             self.login_item = rumps.MenuItem("Start at login", callback=self.toggle_login)
             self.login_item.state = LAUNCH_AGENT.exists()
-            # Update checking: the item retitles to "Download vX…" when a newer
-            # release is found; clicking it then opens the download page.
-            self._update_url = None        # set when an update is available
+            # Update checking. When a newer release is found the item becomes a
+            # one-click "Install vX & Relaunch" (in-place, no browser) for .app
+            # installs, or a download link for pip installs. With auto-install
+            # on, the periodic check installs silently once the server is idle.
+            self._update_url = None        # download page (pip installs / fallback)
+            self._update_info = None       # full appcast dict (in-place install)
             self._update_result = None     # (manual, info) handed off from the worker thread
+            self._installing = False
+            self._silent_pending = False   # auto-install waiting for an idle server
             self.update_item = rumps.MenuItem("Check for Updates…", callback=self.on_update_item)
             self.autocheck_item = rumps.MenuItem("Auto-check for updates", callback=self.toggle_autocheck)
             self.autocheck_item.state = updater.auto_check_enabled()
+            self.autoinstall_item = rumps.MenuItem("Install updates automatically",
+                                                   callback=self.toggle_autoinstall)
+            self.autoinstall_item.state = updater.auto_install_enabled()
             self.menu = [
                 self.status_item,
                 None,
@@ -136,6 +144,7 @@ def main():
                 None,
                 self.update_item,
                 self.autocheck_item,
+                self.autoinstall_item,
                 None,
                 self.login_item,
                 None,
@@ -230,10 +239,20 @@ def main():
             _r.notification("Misanthropic", "Copied", BASE_URL)
 
         # ---- updates ----
+        def _can_self_update(self):
+            info = self._update_info or {}
+            return (updater.can_install_in_place()
+                    and bool(info.get("sha256")) and bool(info.get("dmg_url")))
+
         def on_update_item(self, _):
-            # Once an update is known, this item opens the download page;
-            # otherwise it triggers a fresh manual check.
-            if self._update_url:
+            # One click, no browser: a known update installs in place when we
+            # can self-swap. Pip installs (or a sha-less appcast) fall back to
+            # the download page. No update known -> fresh manual check.
+            if self._installing:
+                return
+            if self._update_info and self._can_self_update():
+                self._install_update(self._update_info)
+            elif self._update_url:
                 webbrowser.open(self._update_url)
             else:
                 self.update_item.title = "Checking…"
@@ -242,6 +261,11 @@ def main():
         def toggle_autocheck(self, sender):
             new = not bool(sender.state)
             updater.set_auto_check(new)
+            sender.state = new
+
+        def toggle_autoinstall(self, sender):
+            new = not bool(sender.state)
+            updater.set_auto_install(new)
             sender.state = new
 
         def _spawn_update_check(self, manual=False):
@@ -263,6 +287,10 @@ def main():
                 self._health_result = None
                 if self.httpd:  # don't overwrite the explicit "stopped" state
                     self._apply_status(health)
+            # A silent install that deferred (requests were in flight) retries
+            # here until the server has a quiet moment.
+            if getattr(self, "_silent_pending", False):
+                self._try_silent_install()
             result = self._update_result
             if result is None:
                 return
@@ -270,20 +298,43 @@ def main():
             manual, info = result
             if info:
                 version = info.get("version", "?")
+                self._update_info = info
                 self._update_url = info.get("download_page") or info.get("dmg_url")
-                self.update_item.title = f"⬆ Download v{version}…"
+                if self._can_self_update():
+                    self.update_item.title = f"⬆ Install v{version} & Relaunch"
+                else:
+                    self.update_item.title = f"⬆ Download v{version}…"
                 if manual:
                     self._prompt_update(info)
+                elif updater.auto_install_enabled() and self._can_self_update():
+                    # Hands-off path: install now if idle; otherwise wait for a
+                    # quiet moment (re-checked every drain tick, i.e. ~2s).
+                    self._try_silent_install()
                 elif not updater.already_notified(version):
                     updater.mark_notified(version)
                     rumps.notification(
                         "Misanthropic",
                         f"Update available — v{version}",
-                        (info.get("notes") or "Click the menu-bar item to download.").strip()[:200],
+                        (info.get("notes") or "One click in the menu bar installs it.").strip()[:200],
                     )
             elif manual:
                 self.update_item.title = "Check for Updates…"
                 rumps.alert("You're up to date", f"v{__version__} is the latest version.")
+
+        def _try_silent_install(self):
+            """Auto-install once no generation is in flight. Called when the
+            periodic check finds an update, and again from the drain timer
+            while one is pending — a busy server defers, never interrupts."""
+            if self._installing or not self._update_info:
+                return
+            if server.requests_in_flight() > 0:
+                self._silent_pending = True
+                return
+            self._silent_pending = False
+            version = self._update_info.get("version", "?")
+            rumps.notification("Misanthropic", f"Updating to v{version}…",
+                               "Installing in the background; the app will relaunch itself.")
+            self._install_update(self._update_info)
 
         def _prompt_update(self, info):
             version = info.get("version", "?")
@@ -318,6 +369,7 @@ def main():
                     info, progress=lambda m: setattr(self.update_item, "title", m))
                 self._install_error = err
                 self._install_done = err is None
+            self._installing = True
             self._install_error = None
             self._install_done = False
             self.update_item.title = "Downloading update…"
@@ -327,6 +379,7 @@ def main():
                     self.quit(None)  # the new instance opens itself
                 elif getattr(self, "_install_error", None):
                     self._watch_timer.stop()
+                    self._installing = False
                     self.update_item.title = "Check for Updates…"
                     rumps.alert("Update failed", self._install_error)
             self._watch_timer = rumps.Timer(watch, 1)

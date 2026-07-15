@@ -7,6 +7,19 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.1.1 — 2026-07-17
+Updates now update themselves.
+
+- **One-click updates from the menu bar.** When a new version is available the
+  menu item reads *Install vX & Relaunch* and clicking it does everything —
+  download, checksum verify, swap, relaunch. No browser, no DMG, no drag.
+- **Automatic updates** (new toggle, on by default). The periodic check
+  installs new releases silently and relaunches — but only when no request is
+  in flight, so a running generation is never cut off. Turn it off in the menu
+  if you'd rather click.
+- Buy-me-a-coffee links, if Misanthropic has earned its keep:
+  [paypal.me/Blacklord100](https://paypal.me/Blacklord100) ☕
+
 ## v1.1.0 — 2026-07-17
 The best-in-class release: onboarding, a new dashboard, durable history, and
 one-click over-the-air updates.

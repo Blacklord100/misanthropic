@@ -56,6 +56,12 @@ QUEUE_WAIT_S = float(os.environ.get("MISANTHROPIC_QUEUE_WAIT_MS", "30000")) / 10
 _governor = threading.BoundedSemaphore(MAX_CONCURRENCY)
 
 
+def requests_in_flight():
+    """How many CLI runs hold a governor slot right now. The auto-updater uses
+    this to swap the bundle only when nothing would be killed mid-generation."""
+    return MAX_CONCURRENCY - _governor._value
+
+
 def classify_claude_error(message):
     """Map a CLI failure onto the hosted API's error taxonomy, so SDK retry
     logic behaves identically to api.anthropic.com."""

@@ -101,6 +101,19 @@ def auto_check_enabled():
     return bool(_load_state().get("auto_check", True))
 
 
+def auto_install_enabled():
+    """Silently install updates found by the periodic check (default on).
+    Only meaningful when running frozen in a .app — pip installs update via pip."""
+    return bool(_load_state().get("auto_install", True))
+
+
+def set_auto_install(enabled):
+    s = _load_state()
+    s["auto_install"] = bool(enabled)
+    _save_state(s)
+    return bool(enabled)
+
+
 def set_auto_check(enabled):
     s = _load_state()
     s["auto_check"] = bool(enabled)

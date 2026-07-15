@@ -25,3 +25,13 @@ def test_request_wants_web(body, expected):
 def test_request_mode(linked, web, expected):
     # _request_mode doesn't touch self; call it unbound with a dummy.
     assert server.Handler._request_mode(None, linked, web) == expected
+
+
+def test_requests_in_flight_tracks_governor():
+    assert server.requests_in_flight() == 0
+    server._governor.acquire()
+    try:
+        assert server.requests_in_flight() == 1
+    finally:
+        server._governor.release()
+    assert server.requests_in_flight() == 0

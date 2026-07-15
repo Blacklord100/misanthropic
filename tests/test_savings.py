@@ -47,3 +47,14 @@ def test_persists_across_reload():
     savings.record("haiku", 1_000_000, 1_000_000)  # $1 + $5 = $6
     # A fresh summary() re-reads the file from disk — simulates a restart.
     assert savings.summary()["all_time_usd"] == 6.0
+
+
+def test_auto_install_pref_roundtrip(tmp_path, monkeypatch):
+    from misanthropic import updater
+    monkeypatch.setattr(updater, "STATE_FILE", tmp_path / "updater.json")
+    monkeypatch.setattr(updater, "CONFIG_DIR", tmp_path)
+    assert updater.auto_install_enabled() is True   # default on
+    updater.set_auto_install(False)
+    assert updater.auto_install_enabled() is False
+    updater.set_auto_install(True)
+    assert updater.auto_install_enabled() is True
