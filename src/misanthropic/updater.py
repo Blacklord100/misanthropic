@@ -66,8 +66,17 @@ def is_newer(remote, current):
 # ---- feed fetch -------------------------------------------------------------
 
 def _fetch_json(url, timeout=_TIMEOUT_S):
-    """GET the appcast and parse it. Returns a dict, or None on any failure."""
+    """GET the appcast and parse it. Returns a dict, or None on any failure.
+
+    A time-bucketed cache-buster is appended: raw.githubusercontent.com's CDN
+    caches ~5 minutes per URL (query string included in the cache key), which
+    otherwise makes "Check for Updates" report stale news right after a
+    release. Bucketing to 60s keeps the CDN mostly warm while capping staleness
+    at a minute."""
     try:
+        import time as _time
+        if "://" in url and "?" not in url:
+            url = f"{url}?t={int(_time.time() // 60)}"
         req = urllib.request.Request(
             url, headers={"User-Agent": f"misanthropic/{__version__}"}
         )
