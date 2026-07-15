@@ -51,15 +51,64 @@ STATIC_DIR = Path(__file__).parent / "static"
 # runs; a request that can't get a slot within the queue window is refused with
 # the API's own 529 overloaded_error, which official SDKs back off and retry —
 # exactly the hosted API's behavior under load.
-MAX_CONCURRENCY = max(1, int(os.environ.get("MISANTHROPIC_MAX_CONCURRENCY", "4")))
+#
+# The limit is adjustable at runtime (Settings page / POST /admin/settings), so
+# it's a Condition-based counter rather than a semaphore: raising the limit
+# immediately wakes queued waiters, lowering it drains naturally as in-flight
+# runs finish. Startup order: MISANTHROPIC_MAX_CONCURRENCY env wins, then the
+# persisted setting (applied in make_httpd), then the default of 8.
+DEFAULT_MAX_CONCURRENCY = 8
 QUEUE_WAIT_S = float(os.environ.get("MISANTHROPIC_QUEUE_WAIT_MS", "30000")) / 1000.0
-_governor = threading.BoundedSemaphore(MAX_CONCURRENCY)
+
+
+class Governor:
+    """A resizable concurrency gate. acquire() blocks up to `timeout` for a
+    slot; set_limit() applies live without disturbing holders."""
+
+    def __init__(self, limit):
+        self._limit = max(1, int(limit))
+        self._active = 0
+        self._cond = threading.Condition()
+
+    def acquire(self, timeout=None):
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._cond:
+            while self._active >= self._limit:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return False
+                self._cond.wait(remaining)
+            self._active += 1
+            return True
+
+    def release(self):
+        with self._cond:
+            self._active = max(0, self._active - 1)
+            self._cond.notify_all()
+
+    def set_limit(self, n):
+        with self._cond:
+            self._limit = max(1, min(int(n), 64))
+            self._cond.notify_all()
+        return self._limit
+
+    @property
+    def limit(self):
+        return self._limit
+
+    @property
+    def in_flight(self):
+        return self._active
+
+
+_governor = Governor(os.environ.get("MISANTHROPIC_MAX_CONCURRENCY",
+                                    DEFAULT_MAX_CONCURRENCY))
 
 
 def requests_in_flight():
     """How many CLI runs hold a governor slot right now. The auto-updater uses
     this to swap the bundle only when nothing would be killed mid-generation."""
-    return MAX_CONCURRENCY - _governor._value
+    return _governor.in_flight
 
 
 def classify_claude_error(message):
@@ -335,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                     "settings": settings.load(),
                     "web_policy": web_policy(),
                     "default_model": claude_mod.DEFAULT_MODEL,
-                    "max_concurrency": MAX_CONCURRENCY,
+                    "max_concurrency": _governor.limit,
                 })
             if path == "/admin/events":
                 return self._stream_admin_events()
@@ -439,10 +488,16 @@ class Handler(BaseHTTPRequestHandler):
                         pass
                 if body.get("default_model"):
                     claude_mod.DEFAULT_MODEL = str(body["default_model"])
+                if body.get("max_concurrency"):
+                    try:
+                        _governor.set_limit(int(body["max_concurrency"]))
+                    except (TypeError, ValueError):
+                        pass
                 history.notify("state")
                 return self._send_json(200, {"settings": new,
                                               "web_policy": web_policy(),
-                                              "default_model": claude_mod.DEFAULT_MODEL})
+                                              "default_model": claude_mod.DEFAULT_MODEL,
+                                              "max_concurrency": _governor.limit})
             return self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
 
         # Auth differs by mode. In session mode the key must be approved; in

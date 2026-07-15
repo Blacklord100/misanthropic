@@ -7,6 +7,12 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.1.2 — 2026-07-17
+- **Concurrency is now a setting.** Change the parallel-Claude-process cap
+  live from Settings (2/4/8/16) — applies immediately, persists across
+  restarts. Default raised from 4 to 8. `MISANTHROPIC_MAX_CONCURRENCY` still
+  wins at startup for env-driven setups.
+
 ## v1.1.1 — 2026-07-17
 Updates now update themselves.
 

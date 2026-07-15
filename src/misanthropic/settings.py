@@ -5,10 +5,11 @@ Env vars still win at startup (they're explicit), but changes made in the
 dashboard persist here and apply live where the code reads through accessors.
 
 Known keys:
-  default_model    "sonnet" | "opus" | "haiku" (or any CLI-accepted alias)
-  web_policy       "auto" | "on" | "off"
-  onboarded        wizard completed (suppresses first-run)
-  retention_days   history retention; 0/absent = keep forever
+  default_model     "sonnet" | "opus" | "haiku" (or any CLI-accepted alias)
+  web_policy        "auto" | "on" | "off"
+  onboarded         wizard completed (suppresses first-run)
+  retention_days    history retention; 0/absent = keep forever
+  max_concurrency   parallel `claude` process cap (default 8)
 """
 
 import json
@@ -20,7 +21,8 @@ from .sessions import CONFIG_DIR, _write_json
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 _lock = threading.Lock()
 
-_ALLOWED = {"default_model", "web_policy", "onboarded", "retention_days"}
+_ALLOWED = {"default_model", "web_policy", "onboarded", "retention_days",
+            "max_concurrency"}
 
 
 def _settings_path():
@@ -63,3 +65,10 @@ def apply_startup():
     if ("MISANTHROPIC_MODEL" not in os.environ and "MODEL" not in os.environ
             and data.get("default_model")):
         claude.DEFAULT_MODEL = str(data["default_model"])
+    if ("MISANTHROPIC_MAX_CONCURRENCY" not in os.environ
+            and data.get("max_concurrency")):
+        from . import server
+        try:
+            server._governor.set_limit(int(data["max_concurrency"]))
+        except (TypeError, ValueError):
+            pass

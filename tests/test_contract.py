@@ -135,7 +135,7 @@ def test_sdk_rate_limit_maps_to_529(client):
 def test_governor_saturation_returns_529(live_server, client, monkeypatch):
     # Zero slots and no queue window: the server must refuse with the API's
     # overload signal rather than stacking subprocesses.
-    monkeypatch.setattr(server, "_governor", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(server, "_governor", server.Governor(1))
     monkeypatch.setattr(server, "QUEUE_WAIT_S", 0.05)
     server._governor.acquire()
     try:

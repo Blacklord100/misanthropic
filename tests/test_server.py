@@ -35,3 +35,22 @@ def test_requests_in_flight_tracks_governor():
     finally:
         server._governor.release()
     assert server.requests_in_flight() == 0
+
+
+def test_governor_resize_wakes_waiters():
+    import threading as _t
+    import time as _time
+    g = server.Governor(1)
+    assert g.acquire(timeout=0.1)
+    assert not g.acquire(timeout=0.05)        # full
+    got = []
+    t = _t.Thread(target=lambda: got.append(g.acquire(timeout=2)))
+    t.start()
+    _time.sleep(0.05)
+    g.set_limit(2)                            # raising the limit frees the waiter
+    t.join(timeout=2)
+    assert got == [True]
+    assert g.in_flight == 2
+    g.release(); g.release()
+    assert g.in_flight == 0
+    assert g.set_limit(999) == 64             # clamped

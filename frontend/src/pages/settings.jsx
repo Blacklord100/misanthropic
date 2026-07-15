@@ -74,9 +74,18 @@ export function Settings() {
         </Row>
         <Row
           title="Concurrency"
-          hint={`Up to ${data.max_concurrency} Claude processes run at once; extra requests queue, then get the API's 529 so SDKs retry. Set MISANTHROPIC_MAX_CONCURRENCY to change.`}
+          hint="How many Claude processes may run at once. Extra requests queue briefly, then get the API's 529 so SDKs retry with backoff. Applies immediately."
         >
-          <span class="tnum text-[13px] text-mute">{data.max_concurrency}</span>
+          <Segmented
+            value={String(data.max_concurrency)}
+            onChange={(v) => save({ max_concurrency: Number(v) }, `Concurrency: ${v}`)}
+            options={[
+              { value: '2', label: '2' },
+              { value: '4', label: '4' },
+              { value: '8', label: '8' },
+              { value: '16', label: '16' },
+            ]}
+          />
         </Row>
       </div>
 
