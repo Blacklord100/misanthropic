@@ -7,6 +7,36 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.1.0 — 2026-07-17
+The best-in-class release: onboarding, a new dashboard, durable history, and
+one-click over-the-air updates.
+
+- **Signed & notarized builds.** The app is now Developer ID-signed and
+  notarized by Apple — it opens with a plain double-click on any Mac, no
+  Gatekeeper warning, no `xattr` incantations.
+- **One-click updates.** When a new version ships, the app offers
+  *Install & Relaunch*: it downloads the DMG, verifies its checksum against the
+  appcast, swaps itself in place, and relaunches. (Updating *to* this version
+  from v1.0.1 is the last manual download.)
+- **First-run wizard.** Find the `claude` CLI (shows where and how), verify
+  your login with a real probe, create a key with copy-ready connect snippets,
+  and fire a live test request — no more dead-end "not found" alert; the menu
+  bar now shows a live status light instead.
+- **New dashboard.** Rebuilt from scratch (dark-first, ⌘K command palette,
+  light mode): savings hero + 30-day sparkline, filterable request history with
+  a full-conversation drawer and token/cost breakdown, per-key stats, settings
+  (default model, web policy, retention) and a Doctor page — all live over SSE.
+- **Durable history.** Requests persist in SQLite across restarts, priced at
+  hosted-API rates per row; optional retention pruning.
+- **Hosted-API-faithful failure modes.** A concurrency governor caps parallel
+  `claude` processes and sheds overload as `529 overloaded_error` (SDKs retry
+  with backoff, just like against api.anthropic.com); CLI failures map to the
+  real error taxonomy (`401 authentication_error`, 504 timeouts).
+- **Environment health loop.** The app re-checks the CLI every 5 minutes and
+  flags "logged out" or "CLI moved" in the menu bar before a request has to fail.
+- **SDK contract tests.** The official `anthropic` client now runs against the
+  server in CI (blocking, streaming, error taxonomy).
+
 ## v1.0.1 — 2026-06-10
 - **Fix: the savings counter now counts auto-cached prompt tokens.** Claude Code
   automatically prompt-caches large requests, so most prompt tokens were reported
