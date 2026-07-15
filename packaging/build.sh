@@ -39,11 +39,20 @@ else
   echo "==> Signing with: $IDENTITY (hardened runtime)"
   # Sign every nested Mach-O individually: --deep does not traverse
   # Resources/lib, so py2app's Python extension modules keep their ad-hoc
-  # signatures and notarization rejects the bundle.
-  find "$APP" -type f -print0 | xargs -0 file | grep Mach-O | cut -d: -f1 | sort -u |
-    while IFS= read -r f; do
-      codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f" 2>/dev/null
-    done
+  # signatures and notarization rejects the bundle. Per-file noise (codesign
+  # prints fat-slice warnings for pyobjc universal .so files) is tolerated —
+  # the strict verify below is what actually gates a broken signature.
+  MACHOS="$(mktemp)"
+  { find "$APP" -type f -print0 | xargs -0 file 2>/dev/null \
+      | grep 'Mach-O' | cut -d: -f1 | sort -u > "$MACHOS"; } || true
+  N=0
+  while IFS= read -r f; do
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f" \
+      2>&1 | grep -v 'replacing existing signature' || true
+    N=$((N + 1))
+  done < "$MACHOS"
+  rm -f "$MACHOS"
+  echo "    signed $N nested Mach-O binaries"
   codesign --force --options runtime --timestamp --sign "$IDENTITY" \
     "$APP/Contents/Frameworks/Python.framework/Versions/"[0-9]* 2>/dev/null || true
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
