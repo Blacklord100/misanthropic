@@ -1,8 +1,8 @@
 {
-  "version": "1.1.1",
-  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.1.1",
-  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.1.1/Misanthropic-1.1.1.dmg",
-  "sha256": "b16730b94d674f1bed452bdaebcddc26f6e57b1fc37f6a150d6ec0a11925f860",
-  "notes": "Updates now update themselves.\n\n- **One-click updates from the menu bar.** When a new version is available the\n  menu item reads *Install vX & Relaunch* and clicking it does everything \u2014\n  download, checksum verify, swap, relaunch. No browser, no DMG, no drag.\n- **Automatic updates** (new toggle, on by default). The periodic check\n  installs new releases silently and relaunches \u2014 but only when no request is\n  in flight, so a running generation is never cut off. Turn it off in the menu\n  if you'd",
+  "version": "1.1.2",
+  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.1.2",
+  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.1.2/Misanthropic-1.1.2.dmg",
+  "sha256": "82665de34ea81f7e307da9cc2586131ac1c772bc2ca8ef10921ac06babdb6878",
+  "notes": "- **Concurrency is now a setting.** Change the parallel-Claude-process cap\n  live from Settings (2/4/8/16) \u2014 applies immediately, persists across\n  restarts. Default raised from 4 to 8. `MISANTHROPIC_MAX_CONCURRENCY` still\n  wins at startup for env-driven setups.",
   "min_macos": "11.0"
 }
