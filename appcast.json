@@ -1,8 +1,8 @@
 {
-  "version": "1.0.1",
-  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.0.1",
-  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.0.1/Misanthropic-1.0.1.dmg",
-  "sha256": "6550e35320f9b0e0b59bc9c25db0a1c4f16bb5cce642cd126a0ad06c68314d1b",
-  "notes": "- **Fix: the savings counter now counts auto-cached prompt tokens.** Claude Code\n  automatically prompt-caches large requests, so most prompt tokens were reported\n  under `cache_creation_input_tokens` / `cache_read_input_tokens` rather than\n  `input_tokens` \u2014 and the savings math ignored them, badly undercounting big\n  requests. It now counts every prompt token (input + cache write + cache read) at\n  the input rate, i.e. what a hosted-API user *without* caching would pay. The\n  activity log's \"i",
+  "version": "1.1.0",
+  "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.1.0",
+  "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.1.0/Misanthropic-1.1.0.dmg",
+  "sha256": "4a2ee719fbdc5a0ea8297bee355edb4bea7f23bd82fffa3d3f8afcd48d57fad2",
+  "notes": "The best-in-class release: onboarding, a new dashboard, durable history, and\none-click over-the-air updates.\n\n- **Signed & notarized builds.** The app is now Developer ID-signed and\n  notarized by Apple \u2014 it opens with a plain double-click on any Mac, no\n  Gatekeeper warning, no `xattr` incantations.\n- **One-click updates.** When a new version ships, the app offers\n  *Install & Relaunch*: it downloads the DMG, verifies its checksum against the\n  appcast, swaps itself in place, and relaunches. (U",
   "min_macos": "11.0"
 }
