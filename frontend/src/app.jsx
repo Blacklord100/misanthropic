@@ -6,6 +6,7 @@ import { Overview } from './pages/overview.jsx'
 import { Requests } from './pages/requests.jsx'
 import { Keys } from './pages/keys.jsx'
 import { Accounts } from './pages/accounts.jsx'
+import { Analytics } from './pages/analytics.jsx'
 import { Settings } from './pages/settings.jsx'
 import { Wizard } from './pages/wizard.jsx'
 
@@ -14,6 +15,7 @@ import { Wizard } from './pages/wizard.jsx'
 const PAGES = [
   { path: 'overview', label: 'Overview', icon: '◈', el: Overview },
   { path: 'requests', label: 'Requests', icon: '≡', el: Requests },
+  { path: 'analytics', label: 'Analytics', icon: '∿', el: Analytics },
   { path: 'keys', label: 'Keys', icon: '⌘', el: Keys },
   { path: 'accounts', label: 'Accounts', icon: '⇄', el: Accounts, aliases: ['doctor'] },
   { path: 'settings', label: 'Settings', icon: '⚙', el: Settings },

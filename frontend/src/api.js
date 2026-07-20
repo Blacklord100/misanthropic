@@ -16,6 +16,7 @@ export const api = {
     return req(`/admin/requests?${q}`)
   },
   series: (days = 30) => req(`/admin/series?days=${days}`),
+  analytics: (days = 30) => req(`/admin/analytics?days=${days}`),
   doctor: (probe = false) => req(`/admin/doctor${probe ? '?probe=1' : ''}`),
   settings: () => req('/admin/settings'),
   saveSettings: (body) => req('/admin/settings', { method: 'POST', body: JSON.stringify(body) }),

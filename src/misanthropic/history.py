@@ -314,6 +314,133 @@ def account_stats():
         return {}
 
 
+def _percentile(sorted_vals, p):
+    if not sorted_vals:
+        return 0
+    idx = min(len(sorted_vals) - 1, int(round(p / 100.0 * (len(sorted_vals) - 1))))
+    return sorted_vals[idx]
+
+
+def analytics(days=30):
+    """Everything the Analytics page shows, in one pass over the window.
+
+    Aggregated in Python rather than N SQL queries — a window is thousands of
+    small rows at most, and this keeps percentiles/derived shares trivial.
+    """
+    days = max(1, min(int(days), 365))
+    now = time.time()
+    since = now - days * 86400
+    try:
+        with _lock:
+            rows = _connect().execute(
+                "SELECT ts, status, duration_ms, input_tokens, output_tokens,"
+                " cache_write, cache_read, web_requests, usd, model, mode,"
+                " account, backend, stream FROM requests WHERE ts >= ?",
+                (since,)).fetchall()
+    except Exception:
+        rows = []
+
+    # Pre-account-tracking rows were all served by the default Claude login;
+    # attribute them to it (same rule as the Accounts page).
+    try:
+        from . import accounts as accounts_mod
+        default_acc = next((a for a in accounts_mod.list_accounts()
+                            if a["backend"] == "claude"
+                            and (a.get("auth") or {}).get("kind") == "default"), None)
+        legacy_label = default_acc["label"] if default_acc else "(pre-accounts)"
+    except Exception:
+        legacy_label = "(pre-accounts)"
+
+    daily = {}
+    groups = {"account": {}, "model": {}, "mode": {}, "backend": {}}
+    durations = []
+    tot = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
+           "cache_write": 0, "cache_read": 0, "web_requests": 0, "usd": 0.0,
+           "streamed": 0}
+
+    def bump(bucket, row_ok, dur, i, o, usd):
+        bucket["requests"] += 1
+        if not row_ok:
+            bucket["errors"] += 1
+        bucket["input_tokens"] += i
+        bucket["output_tokens"] += o
+        bucket["usd"] += usd
+        if dur:
+            bucket["durations"].append(dur)
+
+    def fresh():
+        return {"requests": 0, "errors": 0, "input_tokens": 0,
+                "output_tokens": 0, "usd": 0.0, "durations": []}
+
+    for (ts, status, dur, i, o, cw, cr, web, usd, model, mode, account,
+         backend, stream) in rows:
+        ok = status == 200
+        i, o, cw, cr = i or 0, o or 0, cw or 0, cr or 0
+        usd = usd or 0.0
+        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+        d = daily.setdefault(day, {"requests": 0, "errors": 0,
+                                   "input_tokens": 0, "output_tokens": 0,
+                                   "usd": 0.0})
+        d["requests"] += 1
+        d["errors"] += 0 if ok else 1
+        d["input_tokens"] += i
+        d["output_tokens"] += o
+        d["usd"] += usd
+
+        for kind, key in (("account", account or legacy_label),
+                          ("model", model or "?"),
+                          ("mode", mode or "?"),
+                          ("backend", backend or "claude")):
+            bump(groups[kind].setdefault(key, fresh()), ok, dur, i, o, usd)
+
+        tot["requests"] += 1
+        tot["errors"] += 0 if ok else 1
+        tot["input_tokens"] += i
+        tot["output_tokens"] += o
+        tot["cache_write"] += cw
+        tot["cache_read"] += cr
+        tot["web_requests"] += web or 0
+        tot["usd"] += usd
+        tot["streamed"] += 1 if stream else 0
+        if dur:
+            durations.append(dur)
+
+    series = []
+    for n in range(days - 1, -1, -1):
+        day = time.strftime("%Y-%m-%d", time.gmtime(now - n * 86400))
+        d = daily.get(day) or {"requests": 0, "errors": 0, "input_tokens": 0,
+                               "output_tokens": 0, "usd": 0.0}
+        series.append({"day": day, **{k: (round(v, 4) if k == "usd" else v)
+                                      for k, v in d.items()}})
+
+    def finish(bucket):
+        durs = sorted(bucket.pop("durations"))
+        bucket["usd"] = round(bucket["usd"], 4)
+        bucket["avg_ms"] = int(sum(durs) / len(durs)) if durs else 0
+        bucket["p95_ms"] = int(_percentile(durs, 95))
+        return bucket
+
+    durations.sort()
+    prompt_total = tot["input_tokens"] + tot["cache_write"] + tot["cache_read"]
+    return {
+        "days": days,
+        "series": series,
+        "by_account": {k: finish(v) for k, v in groups["account"].items()},
+        "by_model": {k: finish(v) for k, v in groups["model"].items()},
+        "by_mode": {k: finish(v) for k, v in groups["mode"].items()},
+        "by_backend": {k: finish(v) for k, v in groups["backend"].items()},
+        "totals": {
+            **{k: (round(v, 4) if k == "usd" else v) for k, v in tot.items()},
+            "error_rate": round(tot["errors"] / tot["requests"], 4) if tot["requests"] else 0,
+            "avg_ms": int(sum(durations) / len(durations)) if durations else 0,
+            "p50_ms": int(_percentile(durations, 50)),
+            "p95_ms": int(_percentile(durations, 95)),
+            "cache_read_share": round(tot["cache_read"] / prompt_total, 4) if prompt_total else 0,
+            "stream_share": round(tot["streamed"] / tot["requests"], 4) if tot["requests"] else 0,
+        },
+    }
+
+
 def prune(keep_days=None):
     """Optional retention: delete rows older than keep_days."""
     if not keep_days:

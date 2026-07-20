@@ -19,6 +19,37 @@ export function Sparkline({ points, height = 44, stroke = 'var(--color-accent)' 
   )
 }
 
+export function Bars({ data, height = 72, color = 'var(--color-accent)', overlayColor = 'var(--color-err)' }) {
+  // data: [{label, value, overlay?}] — overlay renders as a red base segment
+  // (e.g. errors within requests). Native <title> gives per-bar tooltips.
+  if (!data?.length) return null
+  const max = Math.max(...data.map((d) => d.value), 1)
+  const w = 100, h = 100
+  const bw = w / data.length
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: '100%', height }}>
+      {data.map((d, i) => {
+        const bh = (d.value / max) * (h - 4)
+        const oh = ((d.overlay || 0) / max) * (h - 4)
+        return (
+          <g key={i}>
+            <rect x={(i * bw + bw * 0.15).toFixed(2)} y={(h - bh).toFixed(2)}
+                  width={(bw * 0.7).toFixed(2)} height={Math.max(bh, d.value ? 0.8 : 0).toFixed(2)}
+                  fill={color} opacity="0.75" rx="0.6">
+              <title>{d.label}: {d.title || d.value}</title>
+            </rect>
+            {oh > 0 && (
+              <rect x={(i * bw + bw * 0.15).toFixed(2)} y={(h - oh).toFixed(2)}
+                    width={(bw * 0.7).toFixed(2)} height={oh.toFixed(2)}
+                    fill={overlayColor} rx="0.6" />
+            )}
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
 export function StatusBadge({ status }) {
   const ok = status === 200
   return (

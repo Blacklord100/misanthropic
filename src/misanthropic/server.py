@@ -412,6 +412,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/series":
                 days = int(self._query().get("days", 30))
                 return self._send_json(200, {"series": history.daily_series(days)})
+            if path == "/admin/analytics":
+                days = int(self._query().get("days", 30))
+                return self._send_json(200, history.analytics(days))
             if path == "/admin/doctor":
                 probe = self._query().get("probe") in ("1", "true")
                 return self._send_json(200, doctor.snapshot(probe=probe))
