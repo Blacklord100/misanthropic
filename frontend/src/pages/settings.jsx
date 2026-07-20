@@ -90,6 +90,21 @@ export function Settings() {
           />
         </Row>
         <Row
+          title="Codex model"
+          hint="Model passed to codex runs (-m). Empty uses codex's built-in default. Shown as codex:<model> in the request log — codex never runs the requested Claude model."
+        >
+          <input
+            class="input w-44"
+            placeholder="codex default"
+            defaultValue={data.settings?.codex_model || ''}
+            onBlur={(e) => {
+              const v = e.target.value.trim()
+              if (v !== (data.settings?.codex_model || '')) save({ codex_model: v }, 'Codex model saved')
+            }}
+            onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+          />
+        </Row>
+        <Row
           title="Account failover"
           hint='"Auto" hops to the next eligible account when the serving one hits its usage limit. "Stop" fails the request (529) and waits for the limit to reset. Individual API keys can override this on the Keys page.'
         >

@@ -100,6 +100,14 @@ def reasoning_effort(requested_model):
     return _EFFORT.get(claude_mod.cli_model(requested_model).split("[", 1)[0], "medium")
 
 
+def served_model_label():
+    """What actually ran, for the dashboard: codex ignores the requested
+    Anthropic id entirely. `codex_model` setting when set (that's what -m
+    passes), else codex's own built-in default (which the JSONL doesn't name)."""
+    m = settings.get("codex_model")
+    return f"codex:{m}" if m else "codex:default-model"
+
+
 _AGENTS_PREAMBLE = (
     "Answer the user directly from your knowledge. Do not run commands, do "
     "not read or write files, do not explore the filesystem.\n\n"

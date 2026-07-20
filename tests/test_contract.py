@@ -306,6 +306,22 @@ def test_thinking_disabled_blocking_stays_text_only(client):
     assert [b.type for b in msg.content] == ["text"]
 
 
+def test_401_does_not_desync_keepalive(client):
+    """A 401 sent before the request body was read used to leave the body
+    bytes in the keep-alive stream — the NEXT request on the connection then
+    parsed garbage and got the wrong response (e.g. the SPA's index.html)."""
+    from misanthropic import sessions
+    sessions.add_key("sk-desync-test", "t")
+    try:
+        with pytest.raises(anthropic.AuthenticationError):
+            client.messages.create(model="claude-sonnet-4-6", max_tokens=16,
+                                   messages=[{"role": "user", "content": "hi"}])
+        for _ in range(2):  # same SDK client = same pooled connection
+            assert "claude-sonnet-4-6" in [m.id for m in client.models.list()]
+    finally:
+        sessions.remove_key("sk-desync-test")
+
+
 def test_history_records_request(client):
     from misanthropic import history
     before = history.count()

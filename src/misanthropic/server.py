@@ -636,6 +636,15 @@ class Handler(BaseHTTPRequestHandler):
                                               "max_concurrency": _governor.limit})
             return self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
 
+        # Read the body BEFORE any early response. On a keep-alive connection,
+        # responding 401 while the request body sits unread leaves those bytes
+        # in the stream — the next request on the connection then parses
+        # garbage and gets the wrong response entirely.
+        try:
+            body = self._read_body()
+        except (json.JSONDecodeError, ValueError):
+            return self._send_error(400, "invalid_request_error", "Request body is not valid JSON.")
+
         # Auth differs by mode. In session mode the key must be approved; in
         # stateless mode the optional single secret applies.
         key = self._client_key()
@@ -644,11 +653,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_error(401, "authentication_error", "Unknown or missing API key.")
         elif API_KEY and key != API_KEY:
             return self._send_error(401, "authentication_error", "Invalid API key.")
-
-        try:
-            body = self._read_body()
-        except (json.JSONDecodeError, ValueError):
-            return self._send_error(400, "invalid_request_error", "Request body is not valid JSON.")
 
         if path == "/v1/messages":
             return self._handle_messages(body, key)
@@ -816,6 +820,11 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, "_log_rec", None) is not None:
             self._log_rec["account"] = acc["label"]
             self._log_rec["backend"] = acc["backend"]
+            if acc["backend"] == "codex":
+                # The dashboard shows what actually ran; codex doesn't run the
+                # requested Anthropic model. (The API response still echoes
+                # the requested id — clients rely on that.)
+                self._log_rec["model"] = codex_mod.served_model_label()
 
     def _routing_candidates(self, caps, fo):
         """The accounts this request may try, per the failover policy.

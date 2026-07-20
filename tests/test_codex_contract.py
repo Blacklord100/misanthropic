@@ -80,6 +80,9 @@ def test_codex_blocking_roundtrip(codex_first, client):
     row = history.recent(limit=1)[0]
     assert row["account"] == "Codex"
     assert row["backend"] == "codex"
+    # The log shows what actually ran — codex never runs the requested
+    # Claude model (the API response echo above is unchanged).
+    assert row["model"] == "codex:default-model"
 
 
 def test_codex_thinking_gated_by_default(codex_first, client):
