@@ -31,10 +31,14 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import (__version__, dashboard, doctor, history, limits, models,
-               request_log, savings, sessions, settings, tool_bridge, translate)
+import itertools
+
+from . import (__version__, accounts, dashboard, doctor, history, limits,
+               models, request_log, savings, sessions, settings, tool_bridge,
+               translate)
 from . import claude as claude_mod
 from .claude import ClaudeError, resolve_web, run_blocking, run_web, stream_events, web_policy
+from .errors import BackendError
 
 # Single shared secret for stateless mode. Ignored when approved keys exist.
 API_KEY = os.environ.get("MISANTHROPIC_API_KEY")
@@ -585,13 +589,26 @@ class Handler(BaseHTTPRequestHandler):
         except translate.ToolRequestError as e:
             return self._send_error(400, "invalid_request_error", str(e))
 
+        # What this request NEEDS — drives which accounts may serve it.
+        # Tools/web/sessions are Claude-only; text/images/thinking can route
+        # to any backend.
+        caps = {
+            "tools": bool(client_tools),
+            "web": use_web and not client_tools,
+            "session": linked and not client_tools,
+            "images": input_format == "stream-json",
+            "thinking": thinking_on,
+            "text": True,
+        }
+
         # Start a request-log entry; finalized in _send_json or the streaming
         # paths' end-of-emit hooks. Visible at GET /admin/requests.
         self._log_start(body, key, linked, use_web, tools=bool(client_tools))
 
         # Take a CLI slot (or refuse with the API's own overload signal, which
         # SDKs retry with backoff). Held for the full run, streaming included —
-        # except tool runs, which hand the slot back while parked.
+        # except tool runs, which hand the slot back while parked. Failover
+        # retries happen inside the held slot.
         if not _governor.acquire(timeout=QUEUE_WAIT_S):
             return self._send_error(529, "overloaded_error",
                                     "Local server is at capacity; retry shortly.")
@@ -605,36 +622,45 @@ class Handler(BaseHTTPRequestHandler):
                     sys.stderr.write("  tools under an approved key run "
                                      "stateless (sessions+tools unsupported)\n")
                 return self._handle_tools(body, client_tools, tool_choice,
-                                          stop_seqs, max_toks, thinking_on, slot)
+                                          stop_seqs, max_toks, thinking_on,
+                                          slot, caps)
 
             # Web mode runs the agentic loop and reshapes its tool blocks into
             # the API's `web_search` content. Stream and non-stream both use it.
             if use_web:
                 if body.get("stream"):
-                    return self._stream_web(prompt, model, system, key if linked else None, input_format)
-                return self._blocking_web(prompt, model, system, key if linked else None, input_format)
+                    return self._stream_web(prompt, model, system, key if linked else None,
+                                            input_format, caps)
+                return self._blocking_web(prompt, model, system, key if linked else None,
+                                          input_format, caps)
 
             if body.get("stream"):
                 return self._stream_messages(prompt, model, system, key if linked else None, input_format,
                                              stop_seqs=stop_seqs, max_toks=max_toks,
-                                             thinking=thinking_on)
+                                             thinking=thinking_on, caps=caps)
 
             if linked:
                 return self._blocking_session(prompt, model, system, key, input_format,
                                               stop_seqs=stop_seqs, max_toks=max_toks,
-                                              thinking=thinking_on)
+                                              thinking=thinking_on, caps=caps)
 
-            try:
+            # Stateless blocking: full failover across eligible accounts.
+            def attempt(acc):
                 blocks = None
                 if thinking_on:
                     wrapper, blocks = run_blocking(prompt, model=model, system=system,
-                                                   input_format=input_format, collect_blocks=True)
+                                                   input_format=input_format,
+                                                   collect_blocks=True, account=acc)
                 else:
-                    wrapper = run_blocking(prompt, model=model, system=system, input_format=input_format)
-            except ClaudeError as e:
-                return self._send_claude_error(e)
-            msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
-            self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
+                    wrapper = run_blocking(prompt, model=model, system=system,
+                                           input_format=input_format, account=acc)
+                msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
+                return limits.apply_to_message(msg, stop_seqs, max_toks)
+
+            result, err = self._attempt_accounts(caps, attempt)
+            if err is not None:
+                return self._send_error(*err)
+            self._send_json(200, result)
         finally:
             slot.release()
 
@@ -642,14 +668,125 @@ class Handler(BaseHTTPRequestHandler):
         status, etype = classify_claude_error(str(e))
         return self._send_error(status, etype, str(e))
 
+    # ---- account routing & failover ----------------------------------------
+
+    def _no_accounts_error(self, caps):
+        msg = "All accounts able to serve this request are rate-limited or unavailable"
+        if accounts.claude_only(caps):
+            msg += " (this request needs Claude-only capabilities: tools/web/session)"
+        return (529, "overloaded_error", msg + ". Retry shortly.")
+
+    def _note_backend_failure(self, acc, message):
+        """Classify a backend failure for failover purposes and update the
+        account's runtime state. Returns True when the next account should be
+        tried (limit/auth), False for errors that failover can't help."""
+        cls = accounts.classify(acc["backend"], message)
+        if cls == "limit":
+            accounts.report_limited(acc["id"], message)
+            return True
+        if cls == "auth":
+            accounts.mark_logged_out(acc["id"], message)
+            return True
+        return False
+
+    def _record_serving(self, acc):
+        if getattr(self, "_log_rec", None) is not None:
+            self._log_rec["account"] = acc["label"]
+            self._log_rec["backend"] = acc["backend"]
+
+    def _attempt_accounts(self, caps, attempt):
+        """Run `attempt(account)` against eligible accounts in order, failing
+        over on usage-limit/auth errors. Returns (result, None) on success or
+        (None, (status, etype, message)) — the caller sends, never this."""
+        order = accounts.eligible(caps)
+        if not order:
+            return None, self._no_accounts_error(caps)
+        last = None
+        for acc in order:
+            try:
+                result = attempt(acc)
+            except BackendError as e:
+                if self._note_backend_failure(acc, str(e)):
+                    last = e
+                    continue
+                status, etype = classify_claude_error(str(e))
+                return None, (status, etype, str(e))
+            accounts.report_ok(acc["id"])
+            self._record_serving(acc)
+            return result, None
+        status, etype = classify_claude_error(str(last))
+        return None, (status, etype, str(last))
+
+    def _resolve_session_account(self, key, caps):
+        """The account a key-linked session must run on. Sessions are
+        account-bound (a claude session id only resumes under the login that
+        created it), so a cooling bound account means 529 — continuity wins
+        over failover. A deleted/disabled bound account is the one case where
+        continuity is impossible: forget the session and rebind fresh.
+        Returns (account, None) or (None, (status, etype, message))."""
+        aid = sessions.get_session_account(key)
+        acc = accounts.get(aid) if aid else None
+        if acc is not None and acc.get("enabled", True):
+            if accounts.cooling(acc["id"]):
+                cds, _ = accounts.cooldown_state()
+                left = (cds.get(acc["id"]) or {}).get("seconds_left", 0)
+                return None, (529, "overloaded_error",
+                              f"This key's session account ({acc['label']}) is "
+                              f"rate-limited; retry in ~{max(60, left)}s.")
+            return acc, None
+        if aid:  # bound account is gone/disabled — the old session can't resume
+            sessions.forget_session(key)
+        order = accounts.eligible(caps)
+        if not order:
+            return None, self._no_accounts_error(caps)
+        return order[0], None
+
+    def _open_stream(self, candidates, make_gen):
+        """The streaming failover trick: pull each candidate's generator until
+        its FIRST real event (buffering the session marker). Errors before the
+        first event fail over; the first event commits the account. Returns
+        (account, chained_iterator, None) or (None, None, (status, etype, msg)).
+        SSE headers must not be sent until this returns an iterator."""
+        if not candidates:
+            return None, None, (529, "overloaded_error",
+                                "All accounts are rate-limited or unavailable. Retry shortly.")
+        last = None
+        for acc in candidates:
+            gen = make_gen(acc)
+            buffered = []
+            failed = None
+            for kind, obj in gen:
+                if kind == "event":
+                    buffered.append((kind, obj))
+                    accounts.report_ok(acc["id"])
+                    self._record_serving(acc)
+                    return acc, itertools.chain(buffered, gen), None
+                if kind == "error":
+                    failed = obj.get("message", "") or "backend error"
+                    break
+                buffered.append((kind, obj))   # "session" marker
+            try:
+                gen.close()  # kills the subprocess if still running
+            except Exception:
+                pass
+            failed = failed if failed is not None else "backend produced no output"
+            if self._note_backend_failure(acc, failed):
+                last = failed
+                continue
+            status, etype = classify_claude_error(failed)
+            return None, None, (status, etype, failed)
+        status, etype = classify_claude_error(last or "")
+        return None, None, (status, etype, last or "no eligible accounts")
+
     # ---- client tool use (function calling) --------------------------------
 
     def _handle_tools(self, body, tools, tool_choice, stop_seqs, max_toks,
-                      thinking, slot):
+                      thinking, slot, caps=None):
         """Route a tools request: continue a parked run when the last message
         is its matching tool_result set, else start a fresh shim run (which is
         also the recovery path for an expired/dead park — the client resends
-        full history, so we flatten it and carry on)."""
+        full history, so we flatten it and carry on). Fresh runs fail over
+        across Claude accounts; a park continuation is bound to its process."""
         model = body.get("model") or claude_mod.DEFAULT_MODEL
         system_raw = translate.extract_system(body)
         # Continuations must match on what the CLIENT sent, so fingerprint the
@@ -671,8 +808,15 @@ class Handler(BaseHTTPRequestHandler):
                 except ClaudeError as e:
                     run.destroy()
                     return self._send_claude_error(e)
-                return self._drive_tool_turn(run, model, stream, thinking,
+                if run.account:
+                    self._record_serving(run.account)
+                fail = self._drive_tool_turn(run, model, stream, thinking,
                                              stop_seqs, max_toks, slot)
+                if fail is not None:
+                    # A continuation has exactly one process — no failover.
+                    status, etype = classify_claude_error(fail)
+                    return self._send_error(status, etype, fail)
+                return
             if partial:
                 return self._send_error(
                     400, "invalid_request_error",
@@ -683,16 +827,40 @@ class Handler(BaseHTTPRequestHandler):
             # tool calls/results, into the prompt.
 
         input_format, prompt = translate.build_cli_input(body.get("messages") or [])
-        try:
-            run = tool_bridge.start_run(tools, model, system, prompt,
-                                        input_format=input_format, fp=fp)
-        except ClaudeError as e:
-            return self._send_claude_error(e)
-        return self._drive_tool_turn(run, model, stream, thinking,
-                                     stop_seqs, max_toks, slot)
+        order = accounts.eligible(caps)
+        if not order:
+            return self._send_error(*self._no_accounts_error(caps or {"tools": True}))
+        last = None
+        for acc in order:
+            try:
+                run = tool_bridge.start_run(tools, model, system, prompt,
+                                            input_format=input_format, fp=fp,
+                                            account=acc)
+            except BackendError as e:
+                if self._note_backend_failure(acc, str(e)):
+                    last = str(e)
+                    continue
+                return self._send_claude_error(e)
+            self._record_serving(acc)
+            fail = self._drive_tool_turn(run, model, stream, thinking,
+                                         stop_seqs, max_toks, slot)
+            if fail is None:
+                accounts.report_ok(acc["id"])
+                return
+            if self._note_backend_failure(acc, fail):
+                last = fail
+                continue
+            status, etype = classify_claude_error(fail)
+            return self._send_error(status, etype, fail)
+        status, etype = classify_claude_error(last or "")
+        return self._send_error(status, etype,
+                                last or "no eligible accounts for tool use")
 
     def _drive_tool_turn(self, run, model, stream, thinking, stop_seqs,
                          max_toks, slot):
+        """Drive one turn of a tool run. Returns None once a response has been
+        sent, or an error string when the run failed before anything shipped —
+        the caller may then fail over to another account."""
         if stream:
             return self._stream_tool_turn(run, model, thinking, stop_seqs,
                                           max_toks, slot)
@@ -721,8 +889,7 @@ class Handler(BaseHTTPRequestHandler):
                 error = obj.get("message", "")
         if error is not None:
             run.destroy()
-            status, etype = classify_claude_error(error)
-            return self._send_error(status, etype, error)
+            return error or "backend error"   # nothing shipped — retryable
 
         if run.turn_stop_reason == "tool_use":
             blocks = run.turn_blocks if thinking else [
@@ -730,8 +897,9 @@ class Handler(BaseHTTPRequestHandler):
                 if b.get("type") not in ("thinking", "redacted_thinking")]
             content = translate.tool_blocks_to_content(blocks)
             self._park_or_destroy(run, slot)
-            return self._send_json(200, translate.tool_use_message(
+            self._send_json(200, translate.tool_use_message(
                 content, run.turn_usage, model, run.message_id))
+            return None
 
         wrapper = run.finish()
         run.destroy()
@@ -739,14 +907,26 @@ class Handler(BaseHTTPRequestHandler):
             detail = wrapper.get("result")
             detail = detail if isinstance(detail, str) else (
                 wrapper.get("subtype") or "Local Claude returned an error.")
-            status, etype = classify_claude_error(detail)
-            return self._send_error(status, etype, detail)
+            return detail                     # nothing shipped — retryable
         blocks = run.turn_blocks if thinking else [
             b for b in run.turn_blocks if b.get("type") == "text"]
         msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
-        return self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
+        self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
+        return None
 
     def _stream_tool_turn(self, run, model, thinking, stop_seqs, max_toks, slot):
+        # First-event delay: peek before sending headers so a run that dies
+        # instantly (rate limit, logged out) can fail over to another account
+        # with a clean JSON error path instead of a committed SSE stream.
+        gen = run.read_turn()
+        first = next(gen, None)
+        if first is None:
+            run.destroy()
+            return "backend produced no output"
+        if first[0] == "error":
+            run.destroy()
+            return first[1].get("message", "") or "backend error"
+
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -776,8 +956,9 @@ class Handler(BaseHTTPRequestHandler):
             sse("message_stop", {"type": "message_stop"})
 
         try:
-            for kind, event in run.read_turn():
+            for kind, event in itertools.chain([first], gen):
                 if kind == "error":
+                    # Post-commit: headers shipped, SSE-error semantics.
                     run.destroy()
                     sse("error", {"type": "error", "error": {
                         "type": "api_error", "message": event.get("message", "")}})
@@ -862,7 +1043,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- web search (opt-in) ------------------------------------------------
 
-    def _run_web_linked(self, prompt, model, system, key, input_format="text"):
+    def _run_web_linked(self, prompt, model, system, key, input_format="text",
+                        account=None):
         """Drive a web-enabled run, handling key-session lock/resume/retry.
 
         `key` is None in stateless mode. Mirrors the stale-session recovery of
@@ -878,36 +1060,60 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 blocks, wrapper, sid = run_web(prompt, model=model, system=system,
                                                resume=resume_id, persist=linked, cwd=cwd,
-                                               input_format=input_format)
+                                               input_format=input_format, account=account)
             except ClaudeError as e:
                 if not (linked and resume_id and _is_invalid_session_error(str(e))):
                     raise
                 sessions.forget_session(key)
                 blocks, wrapper, sid = run_web(prompt, model=model, system=system,
                                                resume=None, persist=True, cwd=cwd,
-                                               input_format=input_format)
+                                               input_format=input_format, account=account)
             if linked and sid:
-                sessions.record_session(key, sid)
+                sessions.record_session(key, sid,
+                                        account_id=account["id"] if account else None)
             return blocks, wrapper
         finally:
             if lock:
                 lock.release()
 
-    def _blocking_web(self, prompt, model, system, key, input_format="text"):
+    def _web_result(self, prompt, model, system, key, input_format, caps):
+        """(blocks, wrapper) for a web run with account routing: stateless
+        requests fail over across Claude accounts; linked ones are bound to
+        the session's account. Returns (result, None) or (None, err_tuple)."""
+        if key is None:
+            return self._attempt_accounts(caps, lambda acc: self._run_web_linked(
+                prompt, model, system, None, input_format, account=acc))
+        acc, err = self._resolve_session_account(key, caps)
+        if err is not None:
+            return None, err
         try:
-            blocks, wrapper = self._run_web_linked(prompt, model, system, key, input_format)
-        except ClaudeError as e:
-            return self._send_claude_error(e)
+            result = self._run_web_linked(prompt, model, system, key,
+                                          input_format, account=acc)
+        except BackendError as e:
+            self._note_backend_failure(acc, str(e))
+            status, etype = classify_claude_error(str(e))
+            return None, (status, etype, str(e))
+        accounts.report_ok(acc["id"])
+        self._record_serving(acc)
+        return result, None
+
+    def _blocking_web(self, prompt, model, system, key, input_format="text",
+                      caps=None):
+        result, err = self._web_result(prompt, model, system, key, input_format, caps)
+        if err is not None:
+            return self._send_error(*err)
+        blocks, wrapper = result
         self._send_json(200, translate.web_message(blocks, wrapper, model))
 
-    def _stream_web(self, prompt, model, system, key, input_format="text"):
+    def _stream_web(self, prompt, model, system, key, input_format="text",
+                    caps=None):
         # The web run is buffered (the agentic loop can't be a single live
         # stream), so do the work first; a failure here can still be a clean
         # JSON error since no SSE headers have been sent yet.
-        try:
-            blocks, wrapper = self._run_web_linked(prompt, model, system, key, input_format)
-        except ClaudeError as e:
-            return self._send_claude_error(e)
+        result, err = self._web_result(prompt, model, system, key, input_format, caps)
+        if err is not None:
+            return self._send_error(*err)
+        blocks, wrapper = result
 
         self.close_connection = True
         self.send_response(200)
@@ -952,15 +1158,23 @@ class Handler(BaseHTTPRequestHandler):
             self._log_finalize(500, error_msg=str(e))
 
     def _blocking_session(self, prompt, model, system, key, input_format="text",
-                          stop_seqs=None, max_toks=None, thinking=False):
-        """Run linked to the key's session: resume it, persist, serialize."""
+                          stop_seqs=None, max_toks=None, thinking=False, caps=None):
+        """Run linked to the key's session: resume it, persist, serialize.
+
+        Sessions are account-bound — no failover here (continuity wins), but
+        limit/auth failures still update the account's runtime state so other
+        traffic routes around it."""
+        acc, err = self._resolve_session_account(key, caps)
+        if err is not None:
+            return self._send_error(*err)
         cwd = str(sessions.WORKSPACE)
         blocks = None
 
         def _run(resume):
             out = run_blocking(prompt, model=model, system=system,
                                resume=resume, persist=True, cwd=cwd,
-                               input_format=input_format, collect_blocks=thinking)
+                               input_format=input_format, collect_blocks=thinking,
+                               account=acc)
             return out if thinking else (out, None)
 
         with sessions.key_lock(key):
@@ -971,20 +1185,55 @@ class Handler(BaseHTTPRequestHandler):
                 # Only start over if the session id is genuinely bad — a transient
                 # error (rate limit, backend hiccup) must NOT destroy the link.
                 if not resume_id or not _is_invalid_session_error(str(e)):
+                    self._note_backend_failure(acc, str(e))
                     return self._send_claude_error(e)
                 sessions.forget_session(key)
                 try:
                     wrapper, blocks = _run(None)
                 except ClaudeError as e2:
+                    self._note_backend_failure(acc, str(e2))
                     return self._send_claude_error(e2)
             sid = wrapper.get("session_id")
             if sid:
-                sessions.record_session(key, sid)
+                sessions.record_session(key, sid, account_id=acc["id"])
+        accounts.report_ok(acc["id"])
+        self._record_serving(acc)
         msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
         self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
 
     def _stream_messages(self, prompt, model, system, key, input_format="text",
-                         stop_seqs=None, max_toks=None, thinking=False):
+                         stop_seqs=None, max_toks=None, thinking=False, caps=None):
+        """Streaming with account routing. _open_stream pulls each candidate
+        generator to its first real event BEFORE any bytes ship, so a
+        rate-limited account fails over invisibly; only a committed stream
+        gets SSE headers."""
+        lock = sessions.key_lock(key) if key else None
+        if lock:
+            lock.acquire()
+        try:
+            if key:
+                acc, err = self._resolve_session_account(key, caps)
+                if err is not None:
+                    return self._send_error(*err)
+                candidates = [acc]
+            else:
+                candidates = accounts.eligible(caps)
+            resume_id = sessions.get_session_id(key) if key else None
+            acc, events, err = self._open_stream(candidates, lambda a: stream_events(
+                prompt, model=model, system=system,
+                resume=resume_id, persist=bool(key),
+                cwd=str(sessions.WORKSPACE) if key else None,
+                input_format=input_format, account=a))
+            if events is None:
+                return self._send_error(*err)
+            self._emit_stream(events, key, resume_id, acc,
+                              stop_seqs, max_toks, thinking)
+        finally:
+            if lock:
+                lock.release()
+
+    def _emit_stream(self, events, key, resume_id, acc,
+                     stop_seqs=None, max_toks=None, thinking=False):
         # SSE has no Content-Length and we don't chunk-encode, so the client
         # detects end-of-stream by EOF. Close the connection when done.
         self.close_connection = True
@@ -1019,20 +1268,12 @@ class Handler(BaseHTTPRequestHandler):
             })
             sse("message_stop", {"type": "message_stop"})
 
-        # key is None in stateless mode; only acquire the lock when session-linked.
-        lock = sessions.key_lock(key) if key else None
-        if lock:
-            lock.acquire()
         try:
-            resume_id = sessions.get_session_id(key) if key else None
             captured_sid = None
             saw_error = False
             log_in = log_out = None
             text_parts = []  # accumulate streamed text for the activity log
-            for kind, obj in stream_events(prompt, model=model, system=system,
-                                           resume=resume_id, persist=bool(key),
-                                           cwd=str(sessions.WORKSPACE) if key else None,
-                                           input_format=input_format):
+            for kind, obj in events:
                 if kind == "session":
                     captured_sid = obj
                 elif kind == "event":
@@ -1088,14 +1329,15 @@ class Handler(BaseHTTPRequestHandler):
                 if saw_error and resume_id and captured_sid is None:
                     sessions.forget_session(key)  # likely a stale session id
                 elif captured_sid:
-                    sessions.record_session(key, captured_sid)
+                    sessions.record_session(key, captured_sid,
+                                            account_id=acc["id"] if acc else None)
             self._log_finalize(
                 500 if saw_error else 200,
                 in_tokens=log_in, out_tokens=log_out,
                 response_text="".join(text_parts) if not saw_error else None,
                 error_msg="upstream stream error" if saw_error else None,
             )
-        except ClaudeError as e:
+        except BackendError as e:
             sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
             self._log_finalize(500, error_msg=str(e))
         except (BrokenPipeError, ConnectionResetError):
@@ -1107,9 +1349,6 @@ class Handler(BaseHTTPRequestHandler):
                 sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
             except Exception:
                 pass
-        finally:
-            if lock:
-                lock.release()
 
 
 def make_httpd(host="127.0.0.1", port=8787):

@@ -126,12 +126,22 @@ def get_session_id(key):
     with _file_lock:
         return _read_json(SESSIONS_FILE, {}).get(key, {}).get("session_id")
 
-def record_session(key, session_id):
+
+def get_session_account(key):
+    """Which account this key's session lives on (sessions are account-bound:
+    a claude session id only resumes under the login that created it)."""
+    with _file_lock:
+        return _read_json(SESSIONS_FILE, {}).get(key, {}).get("account_id")
+
+
+def record_session(key, session_id, account_id=None):
     """Store/refresh the session id for a key and bump its turn counter."""
     with _file_lock:
         sessions = _read_json(SESSIONS_FILE, {})
         rec = sessions.get(key, {})
         rec["session_id"] = session_id
+        if account_id:
+            rec["account_id"] = account_id
         rec["turns"] = rec.get("turns", 0) + 1
         rec["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         sessions[key] = rec
