@@ -491,9 +491,18 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
         raise ClaudeError("Local Claude timed out. Try again or a faster model.")
 
     if proc.returncode != 0:
-        # claude often writes a JSON error to stdout (e.g. error_max_turns) while
-        # leaving stderr empty, so fall back to stdout for a useful message.
-        raise ClaudeError(proc.stderr.strip() or proc.stdout.strip() or f"claude exited with code {proc.returncode}")
+        # claude often writes a JSON error to stdout (e.g. error_max_turns,
+        # "Not logged in") while leaving stderr empty — surface the human
+        # `result` string from that wrapper, not the raw JSON blob.
+        detail = proc.stderr.strip()
+        if not detail:
+            raw = proc.stdout.strip()
+            try:
+                inner = json.loads(raw).get("result")
+                detail = inner if isinstance(inner, str) and inner else raw
+            except (json.JSONDecodeError, AttributeError):
+                detail = raw
+        raise ClaudeError(detail or f"claude exited with code {proc.returncode}")
 
     try:
         wrapper = json.loads(proc.stdout)

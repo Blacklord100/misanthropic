@@ -170,6 +170,39 @@ def remove(account_id):
         _logged_out.pop(account_id, None)
 
 
+def set_first(account_id):
+    """Make this account the serving (1st) account; everyone else keeps their
+    relative order as 2nd, 3rd… fallbacks. Ordering replaces pinning, so any
+    old pin is cleared."""
+    def _do(data):
+        accs = sorted(data["accounts"], key=lambda a: a.get("priority", 0))
+        if not any(a["id"] == account_id for a in accs):
+            raise KeyError(account_id)
+        ordered = ([a for a in accs if a["id"] == account_id]
+                   + [a for a in accs if a["id"] != account_id])
+        for i, a in enumerate(ordered):
+            a["priority"] = i
+        data["pinned"] = None
+    _mutate(_do)
+
+
+def move(account_id, delta):
+    """Swap an account with its neighbor in the serving order
+    (delta < 0 = up, > 0 = down)."""
+    def _do(data):
+        accs = sorted(data["accounts"], key=lambda a: a.get("priority", 0))
+        idx = next((i for i, a in enumerate(accs) if a["id"] == account_id), None)
+        if idx is None:
+            raise KeyError(account_id)
+        j = idx + (1 if delta > 0 else -1)
+        if 0 <= j < len(accs):
+            accs[idx], accs[j] = accs[j], accs[idx]
+        for i, a in enumerate(accs):
+            a["priority"] = i
+        data["pinned"] = None
+    _mutate(_do)
+
+
 def pinned():
     data = _load()
     return data.get("pinned") if data else None

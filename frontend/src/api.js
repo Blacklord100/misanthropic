@@ -35,8 +35,10 @@ export const api = {
     req('/admin/accounts/update', { method: 'POST', body: JSON.stringify({ id, ...patch }) }),
   accountDelete: (id) =>
     req('/admin/accounts/delete', { method: 'POST', body: JSON.stringify({ id }) }),
-  accountPin: (id) =>
-    req('/admin/accounts/pin', { method: 'POST', body: JSON.stringify({ id }) }),
+  accountFirst: (id) =>
+    req('/admin/accounts/first', { method: 'POST', body: JSON.stringify({ id }) }),
+  accountMove: (id, direction) =>
+    req('/admin/accounts/move', { method: 'POST', body: JSON.stringify({ id, direction }) }),
   accountProbe: (id) =>
     req('/admin/accounts/probe', { method: 'POST', body: JSON.stringify({ id }) }),
 }

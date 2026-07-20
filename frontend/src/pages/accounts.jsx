@@ -46,7 +46,9 @@ function LoginHint({ acc }) {
   )
 }
 
-function AccountCard({ acc, onChanged }) {
+const ordinal = (n) => `${n}${['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : Math.min(n % 10, 4) % 4] || 'th'}`
+
+function AccountCard({ acc, count, onChanged }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const st = STATUS[acc.status] || STATUS.unknown
@@ -54,6 +56,7 @@ function AccountCard({ acc, onChanged }) {
   // A logged-out isolated account needs its terminal login — show the
   // command without a click. Default-login accounts never need it.
   const needsLogin = acc.status === 'logged_out' && acc.auth_path
+  const first = acc.position === 0
 
   const act = async (fn, msg) => {
     setBusy(true)
@@ -63,37 +66,68 @@ function AccountCard({ acc, onChanged }) {
   return (
     <div class="panel p-4" style={acc.enabled ? {} : { opacity: 0.6 }}>
       <div class="flex items-start justify-between gap-4">
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <Dot tone={st.tone} pulse={acc.serving} />
-            <span class="truncate text-[13.5px] font-semibold">{acc.label}</span>
-            <span class={`rounded px-1.5 py-0.5 text-[10.5px] font-medium ${BACKEND_BADGE[acc.backend]?.cls || ''}`}>
-              {BACKEND_BADGE[acc.backend]?.label || acc.backend}
+        <div class="flex min-w-0 gap-3">
+          {/* serving-order rank */}
+          <div class="flex w-14 shrink-0 flex-col items-center pt-0.5">
+            <span class="tnum text-[17px] font-semibold">{ordinal(acc.position + 1)}</span>
+            <span class="text-[10px] uppercase tracking-wide text-faint">
+              {first ? 'serves' : 'fallback'}
             </span>
-            {acc.serving && (
-              <span class="rounded px-1.5 py-0.5 text-[10.5px] font-semibold"
-                    style={{ background: 'color-mix(in oklab, var(--color-ok) 15%, transparent)', color: 'var(--color-ok)' }}>
-                Serving
+            <div class="mt-1 flex gap-0.5">
+              <button class="btn btn-ghost !h-5 !px-1 text-[11px]" disabled={busy || first}
+                      title="Move up the order"
+                      onClick={() => act(() => api.accountMove(acc.id, 'up'))}>↑</button>
+              <button class="btn btn-ghost !h-5 !px-1 text-[11px]"
+                      disabled={busy || acc.position >= count - 1}
+                      title="Move down the order"
+                      onClick={() => act(() => api.accountMove(acc.id, 'down'))}>↓</button>
+            </div>
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <Dot tone={st.tone} pulse={acc.serving} />
+              <span class="truncate text-[13.5px] font-semibold">{acc.label}</span>
+              <span class={`rounded px-1.5 py-0.5 text-[10.5px] font-medium ${BACKEND_BADGE[acc.backend]?.cls || ''}`}>
+                {BACKEND_BADGE[acc.backend]?.label || acc.backend}
               </span>
-            )}
-            {acc.pinned && <span class="text-[10.5px] text-faint">📌 pinned</span>}
-          </div>
-          <div class="mt-1 text-[12px] text-mute">
-            {st.text}
-            {acc.status === 'limited' && acc.cooldown && (
-              <> · retries in <Countdown seconds={acc.cooldown.seconds_left} /></>
-            )}
-            {acc.detail && acc.status !== 'ok' && (
-              <span class="text-faint"> — {acc.detail.slice(0, 80)}</span>
-            )}
-          </div>
-          <div class="tnum mt-2 text-[12px] text-mute">
-            {fmtNum(stats.today_requests || 0)} today · {fmtNum(stats.requests || 0)} all-time
-            {stats.usd > 0 && <> · {fmtUsd(stats.usd)} dodged</>}
+              {acc.serving && (
+                <span class="rounded px-1.5 py-0.5 text-[10.5px] font-semibold"
+                      style={{ background: 'color-mix(in oklab, var(--color-ok) 15%, transparent)', color: 'var(--color-ok)' }}>
+                  Serving
+                </span>
+              )}
+            </div>
+            <div class="mt-1 text-[12px] text-mute">
+              {st.text}
+              {acc.status === 'limited' && acc.cooldown && (
+                <> · retries in <Countdown seconds={acc.cooldown.seconds_left} /></>
+              )}
+              {acc.detail && acc.status !== 'ok' && (
+                <span class="text-faint"> — {acc.detail.slice(0, 80)}</span>
+              )}
+            </div>
+            {/* tokens & cost, tracked per account (aggregate lives on Overview) */}
+            <div class="tnum mt-2 text-[12px] text-mute">
+              Today: {fmtNum(stats.today_requests || 0)} req ·{' '}
+              {fmtNum(stats.today_output_tokens || 0)} tok out ·{' '}
+              <span style={{ color: 'var(--color-ok)' }}>{fmtUsd(stats.today_usd || 0)}</span>
+            </div>
+            <div class="tnum text-[12px] text-faint">
+              All-time: {fmtNum(stats.requests || 0)} req ·{' '}
+              {fmtNum(stats.input_tokens || 0)} in / {fmtNum(stats.output_tokens || 0)} out ·{' '}
+              {fmtUsd(stats.usd || 0)} dodged
+            </div>
           </div>
         </div>
         <div class="flex shrink-0 flex-col items-end gap-1.5">
           <div class="flex gap-1.5">
+            {!first && acc.enabled && (
+              <button class="btn btn-primary !h-7 text-[11.5px]" disabled={busy}
+                      onClick={() => act(() => api.accountFirst(acc.id),
+                                         `${acc.label} serves first now`)}>
+                Make 1st
+              </button>
+            )}
             {acc.enabled ? (
               <button class="btn !h-7 text-[11.5px]" disabled={busy}
                       onClick={() => act(() => api.accountUpdate(acc.id, { enabled: false }),
@@ -107,11 +141,6 @@ function AccountCard({ acc, onChanged }) {
                 Activate
               </button>
             )}
-            <button class="btn btn-ghost !h-7 text-[11.5px]" disabled={busy}
-                    onClick={() => act(() => api.accountPin(acc.pinned ? null : acc.id),
-                                       acc.pinned ? 'Unpinned' : `${acc.label} serves first now`)}>
-              {acc.pinned ? 'Unpin' : 'Use first'}
-            </button>
           </div>
           <div class="flex gap-1.5">
             <button class="btn btn-ghost !h-6 text-[11px]" disabled={busy}
@@ -261,9 +290,9 @@ export function Accounts() {
       </div>
 
       <div class="mb-4 text-[12.5px] leading-relaxed text-mute">
-        Requests serve from the pinned account first, then priority order. What happens
-        at a usage limit is the <a href="#/settings" class="font-medium" style={{ color: 'var(--color-accent-ink)' }}>
-        failover policy</a>: "Auto" hops to the next eligible account, "Stop" (the default)
+        The 1st account serves; the rest are its fallbacks, in order. What happens at a
+        usage limit is the <a href="#/settings" class="font-medium" style={{ color: 'var(--color-accent-ink)' }}>
+        failover policy</a>: "Auto" hops down the fallback order, "Stop" (the default)
         waits for the limit to reset — and each API key can override it. Tools, web search
         and session keys always serve from Claude accounts.
       </div>
@@ -274,7 +303,9 @@ export function Accounts() {
         <EmptyState icon="⇄" title="No accounts" hint="Add a Claude or Codex account to get started." />
       ) : (
         <div class="grid gap-3">
-          {rows.map((acc) => <AccountCard key={acc.id} acc={acc} onChanged={reload} />)}
+          {rows.map((acc) => (
+            <AccountCard key={acc.id} acc={acc} count={rows.length} onChanged={reload} />
+          ))}
         </div>
       )}
 

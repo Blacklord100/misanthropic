@@ -185,34 +185,34 @@ def main():
             # on it. Only clear once items exist (add() creates the submenu).
             if len(self.account_menu):
                 self.account_menu.clear()
-            pinned = accounts.pinned()
             serving = accounts.serving({"text": True})
-            auto = rumps.MenuItem("Auto (priority order)",
-                                  callback=self._on_pick_account)
-            auto.state = pinned is None
-            auto._account_id = None
-            self.account_menu.add(auto)
-            self.account_menu.add(None)
             cds, logged_out = accounts.cooldown_state()
-            for acc in accounts.list_accounts():
-                suffix = ""
+            # Ordered serving list: picking one makes it 1st; the rest become
+            # its fallbacks in order.
+            for i, acc in enumerate(accounts.list_accounts()):
+                marks = [f"{i + 1}."]
                 if serving and acc["id"] == serving["id"]:
-                    suffix = "  · serving"
+                    marks.append("serving ·")
                 elif acc["id"] in cds:
-                    suffix = "  · limited"
+                    marks.append("limited ·")
                 elif acc["id"] in logged_out:
-                    suffix = "  · logged out"
+                    marks.append("logged out ·")
                 elif not acc.get("enabled", True):
-                    suffix = "  · disabled"
-                item = rumps.MenuItem(f"{acc['label']}{suffix}",
+                    marks.append("disabled ·")
+                item = rumps.MenuItem(f"{' '.join(marks)} {acc['label']}",
                                       callback=self._on_pick_account)
-                item.state = acc["id"] == pinned
+                item.state = i == 0
                 item._account_id = acc["id"]
                 self.account_menu.add(item)
 
         def _on_pick_account(self, sender):
             from . import accounts
-            accounts.set_pinned(getattr(sender, "_account_id", None))
+            aid = getattr(sender, "_account_id", None)
+            if aid:
+                try:
+                    accounts.set_first(aid)
+                except KeyError:
+                    pass
             self._rebuild_account_menu()
 
         # ---- environment health loop ----

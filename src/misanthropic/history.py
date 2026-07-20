@@ -288,9 +288,10 @@ def key_stats():
 
 
 def account_stats():
-    """{account_label: {requests, usd, output_tokens, today_requests,
-    today_output_tokens}} — powers the Accounts page. Pre-accounts rows
-    (account='') bucket under ''."""
+    """Per-account usage for the Accounts page — tokens and cost are tracked
+    separately per account here; every other surface stays aggregate.
+    "in" tokens = input + cache write + cache read (what a prompt costs).
+    Pre-accounts rows (account='') bucket under ''."""
     midnight = time.mktime(time.strptime(
         time.strftime("%Y-%m-%d", time.gmtime()), "%Y-%m-%d"))
     try:
@@ -298,13 +299,17 @@ def account_stats():
             rows = _connect().execute(
                 "SELECT account, COUNT(*), COALESCE(SUM(usd),0),"
                 " COALESCE(SUM(output_tokens),0),"
+                " COALESCE(SUM(input_tokens + cache_write + cache_read),0),"
                 " SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END),"
-                " COALESCE(SUM(CASE WHEN ts >= ? THEN output_tokens ELSE 0 END),0)"
-                " FROM requests GROUP BY account", (midnight, midnight)
+                " COALESCE(SUM(CASE WHEN ts >= ? THEN output_tokens ELSE 0 END),0),"
+                " COALESCE(SUM(CASE WHEN ts >= ? THEN usd ELSE 0 END),0)"
+                " FROM requests GROUP BY account",
+                (midnight, midnight, midnight)
             ).fetchall()
         return {r[0]: {"requests": r[1], "usd": round(r[2], 4),
-                       "output_tokens": r[3], "today_requests": r[4],
-                       "today_output_tokens": r[5]} for r in rows}
+                       "output_tokens": r[3], "input_tokens": r[4],
+                       "today_requests": r[5], "today_output_tokens": r[6],
+                       "today_usd": round(r[7], 4)} for r in rows}
     except Exception:
         return {}
 

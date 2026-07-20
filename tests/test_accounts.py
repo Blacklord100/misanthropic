@@ -95,6 +95,31 @@ def test_logged_out_until_ok():
     assert accounts.eligible({})
 
 
+def test_set_first_and_move_order():
+    b = accounts.add("Claude B", "claude")
+    c = accounts.add("Codex C", "codex")
+    ids = lambda: [a["id"] for a in accounts.list_accounts()]
+    assert ids() == ["claude-default", b["id"], c["id"]]
+    accounts.set_first(c["id"])
+    assert ids() == [c["id"], "claude-default", b["id"]]
+    accounts.move(b["id"], -1)   # up: swaps with claude-default
+    assert ids() == [c["id"], b["id"], "claude-default"]
+    accounts.move(c["id"], 1)    # down one
+    assert ids() == [b["id"], c["id"], "claude-default"]
+    accounts.move(b["id"], -1)   # already first: no-op
+    assert ids()[0] == b["id"]
+    with pytest.raises(KeyError):
+        accounts.set_first("nope")
+
+
+def test_set_first_clears_pin():
+    b = accounts.add("Claude B", "claude")
+    accounts.set_pinned(b["id"])
+    accounts.set_first("claude-default")
+    assert accounts.pinned() is None
+    assert accounts.eligible({})[0]["id"] == "claude-default"
+
+
 def test_pin_moves_to_front():
     b = accounts.add("Claude B", "claude")
     accounts.set_pinned(b["id"])

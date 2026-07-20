@@ -104,6 +104,9 @@ def _cmd_accounts(args):
     if args.action == "remove":
         accounts.remove(args.id)
         print("removed.")
+    elif args.action == "first":
+        accounts.set_first(args.id)
+        print(f"{acc['label']} serves first now; the rest are its fallbacks in order.")
     elif args.action == "pin":
         accounts.set_pinned(args.id)
         print(f"pinned {acc['label']} — it now serves first.")
@@ -168,8 +171,9 @@ def main(argv=None):
     p_sessions.add_argument("key", nargs="?", help="The API key")
 
     p_accounts = sub.add_parser("accounts", help="Manage backend accounts (claude/codex)")
-    p_accounts.add_argument("action", choices=["list", "add", "remove", "pin",
-                                               "unpin", "enable", "disable", "probe"])
+    p_accounts.add_argument("action", choices=["list", "add", "remove", "first",
+                                               "pin", "unpin", "enable", "disable",
+                                               "probe"])
     p_accounts.add_argument("id", nargs="?",
                             help="Account id (or backend name for `add`)")
     p_accounts.add_argument("--label", help="Display label for `add`")

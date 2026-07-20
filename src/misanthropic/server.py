@@ -472,7 +472,7 @@ class Handler(BaseHTTPRequestHandler):
         serving = accounts.serving({"text": True})
         pinned = accounts.pinned()
         rows = []
-        for acc in accounts.list_accounts():
+        for position, acc in enumerate(accounts.list_accounts()):
             st = status_by_id.get(acc["id"], {})
             auth = acc.get("auth") or {}
             rows.append({
@@ -482,6 +482,7 @@ class Handler(BaseHTTPRequestHandler):
                 "auth_kind": auth.get("kind"),
                 "auth_path": auth.get("path"),
                 "priority": acc.get("priority", 0),
+                "position": position,   # 0 = serving, 1+ = fallback order
                 "enabled": acc.get("enabled", True),
                 "pinned": acc["id"] == pinned,
                 "serving": bool(serving and serving["id"] == acc["id"]),
@@ -583,6 +584,19 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/accounts/pin":
                 pinned = accounts.set_pinned(body.get("id") or None)
                 return self._send_json(200, {"pinned": pinned})
+            if path == "/admin/accounts/first":
+                try:
+                    accounts.set_first(str(body.get("id", "")))
+                except KeyError:
+                    return self._send_error(404, "not_found_error", "Unknown account.")
+                return self._send_json(200, {"ok": True})
+            if path == "/admin/accounts/move":
+                try:
+                    accounts.move(str(body.get("id", "")),
+                                  1 if body.get("direction") == "down" else -1)
+                except KeyError:
+                    return self._send_error(404, "not_found_error", "Unknown account.")
+                return self._send_json(200, {"ok": True})
             if path == "/admin/accounts/probe":
                 acc = accounts.get(str(body.get("id", "")))
                 if acc is None:
