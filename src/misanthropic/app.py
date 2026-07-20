@@ -181,7 +181,10 @@ def main():
         # ---- account picker ----
         def _rebuild_account_menu(self):
             from . import accounts
-            self.account_menu.clear()
+            # A fresh MenuItem has no backing NSMenu yet; clear() would crash
+            # on it. Only clear once items exist (add() creates the submenu).
+            if len(self.account_menu):
+                self.account_menu.clear()
             pinned = accounts.pinned()
             serving = accounts.serving({"text": True})
             auto = rumps.MenuItem("Auto (priority order)",
