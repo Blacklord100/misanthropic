@@ -53,10 +53,18 @@ CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests (ts);
 CREATE INDEX IF NOT EXISTS idx_requests_key ON requests (key_label);
 """
 
+# Columns added after v1.2 ship as ALTER TABLE migrations in _connect() (there
+# is no migration framework; keep these appended LAST so _COLUMNS order matches
+# the on-disk layout of migrated databases).
+_MIGRATIONS = (
+    "ALTER TABLE requests ADD COLUMN account TEXT DEFAULT ''",
+    "ALTER TABLE requests ADD COLUMN backend TEXT DEFAULT ''",
+)
+
 _COLUMNS = ("id", "ts", "key_label", "model", "mode", "stream", "status",
             "duration_ms", "input_tokens", "output_tokens", "cache_write",
             "cache_read", "web_requests", "usd", "prompt_text",
-            "response_text", "error")
+            "response_text", "error", "account", "backend")
 
 
 def _db_path():
@@ -78,6 +86,11 @@ def _connect():
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
+    for ddl in _MIGRATIONS:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     _conn, _conn_path = conn, path
     return conn
@@ -141,8 +154,8 @@ def append(rec):
             cur = conn.execute(
                 "INSERT INTO requests (ts, key_label, model, mode, stream, status,"
                 " duration_ms, input_tokens, output_tokens, cache_write, cache_read,"
-                " web_requests, usd, prompt_text, response_text, error)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " web_requests, usd, prompt_text, response_text, error, account, backend)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     rec.get("ts") or time.time(),
                     rec.get("key_label", ""),
@@ -160,6 +173,8 @@ def append(rec):
                     rec.get("prompt_text", "") or "",
                     rec.get("response_text", "") or "",
                     rec.get("error", "") or "",
+                    rec.get("account", "") or "",
+                    rec.get("backend", "") or "",
                 ),
             )
             conn.commit()
@@ -177,7 +192,7 @@ def append(rec):
 # ---- reads ---------------------------------------------------------------------
 
 def recent(limit=50, before_id=None, key_label=None, model=None,
-           status=None, q=None):
+           status=None, q=None, account=None):
     """Filtered page of requests, newest first. `before_id` paginates backwards.
 
     `status` filters a class: "ok" (200) or "error" (non-200). `q` substring-
@@ -191,6 +206,8 @@ def recent(limit=50, before_id=None, key_label=None, model=None,
         where.append("key_label = ?"); params.append(key_label)
     if model:
         where.append("model LIKE ?"); params.append(f"%{model}%")
+    if account:
+        where.append("account = ?"); params.append(account)
     if status == "ok":
         where.append("status = 200")
     elif status == "error":
@@ -266,6 +283,28 @@ def key_stats():
                 " FROM requests GROUP BY key_label"
             ).fetchall()
         return {r[0]: {"requests": r[1], "usd": round(r[2], 4)} for r in rows}
+    except Exception:
+        return {}
+
+
+def account_stats():
+    """{account_label: {requests, usd, output_tokens, today_requests,
+    today_output_tokens}} — powers the Accounts page. Pre-accounts rows
+    (account='') bucket under ''."""
+    midnight = time.mktime(time.strptime(
+        time.strftime("%Y-%m-%d", time.gmtime()), "%Y-%m-%d"))
+    try:
+        with _lock:
+            rows = _connect().execute(
+                "SELECT account, COUNT(*), COALESCE(SUM(usd),0),"
+                " COALESCE(SUM(output_tokens),0),"
+                " SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END),"
+                " COALESCE(SUM(CASE WHEN ts >= ? THEN output_tokens ELSE 0 END),0)"
+                " FROM requests GROUP BY account", (midnight, midnight)
+            ).fetchall()
+        return {r[0]: {"requests": r[1], "usd": round(r[2], 4),
+                       "output_tokens": r[3], "today_requests": r[4],
+                       "today_output_tokens": r[5]} for r in rows}
     except Exception:
         return {}
 

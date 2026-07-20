@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import threading
 
+from .errors import BackendError
+
 # `--tools ""` REMOVES every tool from the model's available set, so it can only
 # produce text. This matters: `--disallowedTools` merely *denies* a tool, but the
 # model still *attempts* the call, which burns the single turn and aborts with
@@ -212,10 +214,11 @@ def claude_available():
     return bool(shutil.which(b) or os.path.exists(os.path.expanduser(b)))
 
 
-def _child_env():
+def _child_env(account=None):
     """Environment for the claude subprocess: os.environ with PATH augmented so
     both we and claude can find the binary and its runtime (node, etc.) even when
-    the app inherited a minimal launchd PATH."""
+    the app inherited a minimal launchd PATH. `account` overlays the env vars
+    that select a specific login (e.g. CLAUDE_CONFIG_DIR)."""
     env = dict(os.environ)
     parts = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
     extra = [os.path.dirname(claude_bin()), "/opt/homebrew/bin", "/usr/local/bin",
@@ -224,6 +227,9 @@ def _child_env():
         if p and p not in parts:
             parts.append(p)
     env["PATH"] = os.pathsep.join(parts)
+    if account is not None:
+        from . import accounts
+        env.update(accounts.child_env_overlay(account))
     return env
 
 
@@ -253,11 +259,11 @@ def cli_model(requested):
 GEN_TIMEOUT_S = float(os.environ.get("GEN_TIMEOUT_MS", "120000")) / 1000.0
 
 
-class ClaudeError(RuntimeError):
+class ClaudeError(BackendError):
     """A user-facing failure from the local Claude run."""
 
 
-def _spawn_claude(args, prompt, cwd, env_extra=None):
+def _spawn_claude(args, prompt, cwd, env_extra=None, account=None):
     """Popen claude, drain stderr concurrently, write the prompt to stdin.
 
     `--verbose` is talkative; if we left stderr buffered until after the run, the
@@ -266,7 +272,7 @@ def _spawn_claude(args, prompt, cwd, env_extra=None):
     error messages. stdin is written with BrokenPipe tolerance so a claude that
     rejects flags and exits early doesn't take us down — its stdout/stderr will
     still explain why. Returns (proc, stderr_lines)."""
-    env = _child_env()
+    env = _child_env(account)
     if env_extra:
         env.update(env_extra)
     try:
@@ -380,7 +386,7 @@ def tool_args(model, system, allowed_tools, mcp_config_json):
     ]
 
 
-def _collect_blocking(args, payload, cwd, timeout_s):
+def _collect_blocking(args, payload, cwd, timeout_s, account=None):
     """Drive a stream-json run and collapse it into a run_blocking-style wrapper.
 
     `--output-format json` can't be combined with `--input-format stream-json`
@@ -392,7 +398,7 @@ def _collect_blocking(args, payload, cwd, timeout_s):
     ordered list of thinking/text content blocks the model produced; the joined
     text is also the fallback if the result event lacks the result string.
     """
-    proc, stderr_lines = _spawn_claude(args, payload, cwd)
+    proc, stderr_lines = _spawn_claude(args, payload, cwd, account=account)
     timer, timed_out = _kill_watchdog(proc, timeout_s)
     wrapper = None
     blocks = []
@@ -436,7 +442,7 @@ def _collect_blocking(args, payload, cwd, timeout_s):
 
 def run_blocking(prompt, model=None, system=None, timeout=None,
                  resume=None, persist=False, cwd=None, input_format="text",
-                 collect_blocks=False):
+                 collect_blocks=False, account=None):
     """Invoke `claude -p --output-format json` and return the parsed wrapper dict.
 
     The wrapper carries `result` (the text), `stop_reason`, `usage`, and
@@ -457,7 +463,7 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
         args = base + ["--output-format", "stream-json", "--verbose"]
         if input_format == "stream-json":
             args += ["--input-format", "stream-json"]
-        wrapper, blocks = _collect_blocking(args, prompt, cwd, timeout_s)
+        wrapper, blocks = _collect_blocking(args, prompt, cwd, timeout_s, account=account)
         return (wrapper, blocks) if collect_blocks else wrapper
     args = base + ["--output-format", "json"]
     try:
@@ -474,7 +480,7 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
             errors="replace",
             timeout=timeout if timeout is not None else GEN_TIMEOUT_S,
             cwd=cwd,
-            env=_child_env(),
+            env=_child_env(account),
         )
     except FileNotFoundError:
         raise ClaudeError(
@@ -501,7 +507,8 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
     return wrapper
 
 
-def stream_events(prompt, model=None, system=None, resume=None, persist=False, cwd=None, input_format="text"):
+def stream_events(prompt, model=None, system=None, resume=None, persist=False,
+                  cwd=None, input_format="text", account=None):
     """Invoke `claude -p --output-format stream-json` and yield events.
 
     The CLI wraps each Anthropic streaming event in a {"type":"stream_event",
@@ -523,7 +530,7 @@ def stream_events(prompt, model=None, system=None, resume=None, persist=False, c
     ]
     if input_format == "stream-json":
         args += ["--input-format", "stream-json"]
-    proc, stderr_lines = _spawn_claude(args, prompt, cwd)
+    proc, stderr_lines = _spawn_claude(args, prompt, cwd, account=account)
     timer, timed_out = _kill_watchdog(proc, GEN_TIMEOUT_S)
     try:
         for line in proc.stdout:
@@ -561,7 +568,8 @@ def stream_events(prompt, model=None, system=None, resume=None, persist=False, c
         yield ("error", {"message": stderr or f"claude exited with code {rc}"})
 
 
-def run_web(prompt, model=None, system=None, resume=None, persist=False, cwd=None, input_format="text"):
+def run_web(prompt, model=None, system=None, resume=None, persist=False,
+            cwd=None, input_format="text", account=None):
     """Run a web-enabled completion and collect the agentic loop's tool blocks.
 
     `--output-format json` collapses the whole run into one `result` string, so
@@ -581,7 +589,7 @@ def run_web(prompt, model=None, system=None, resume=None, persist=False, cwd=Non
     ]
     if input_format == "stream-json":
         args += ["--input-format", "stream-json"]
-    proc, stderr_lines = _spawn_claude(args, prompt, cwd)
+    proc, stderr_lines = _spawn_claude(args, prompt, cwd, account=account)
     timer, timed_out = _kill_watchdog(proc, WEB_TIMEOUT_S)
 
     blocks = []

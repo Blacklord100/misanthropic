@@ -18,6 +18,13 @@ def _isolate_state(tmp_path, monkeypatch):
     monkeypatch.setattr(savings, "SAVINGS_FILE", tmp_path / "savings.json")
     # Don't let an inherited env var flip the server into session mode.
     monkeypatch.delenv("MISANTHROPIC_KEYS", raising=False)
+    # Account registry state (cooldowns, logged-out marks) must not leak
+    # between tests; the registry file itself is already isolated via
+    # CONFIG_DIR above.
+    from misanthropic import accounts
+    accounts._reset()
+    yield
+    accounts._reset()
 
 
 @pytest.fixture(autouse=True)

@@ -24,10 +24,28 @@ from . import claude
 
 _lock = threading.Lock()
 _version_cache = {}     # {path: (version, checked_at)}
-_login_cache = {"ok": None, "detail": "", "checked_at": None}
+# Login verdicts are per account (multi-account: each CLAUDE_CONFIG_DIR is its
+# own login). Key "default" = the implicit ~/.claude login.
+_login_caches = {}      # {account_id: {"ok":..., "detail":..., "checked_at":...}}
 
 VERSION_TTL_S = 15 * 60
 _PROBE_TIMEOUT_S = 45
+
+
+def _login_cache_for(account):
+    key = account["id"] if isinstance(account, dict) else "default"
+    with _lock:
+        return dict(_login_caches.get(key) or
+                    {"ok": None, "detail": "", "checked_at": None})
+
+
+def _login_cache_set(account, **kw):
+    key = account["id"] if isinstance(account, dict) else "default"
+    with _lock:
+        cache = _login_caches.setdefault(
+            key, {"ok": None, "detail": "", "checked_at": None})
+        cache.update(kw)
+        return dict(cache)
 
 
 def _binary_check():
@@ -59,14 +77,14 @@ def _version_check(path):
     return version
 
 
-def probe_login(force=False, max_age_s=600):
-    """Run (or reuse) the login probe: one minimal haiku completion.
+def probe_login(force=False, max_age_s=600, account=None):
+    """Run (or reuse) the login probe for one account: a minimal haiku
+    completion under that account's env.
 
     Returns {"ok": bool|None, "detail": str, "checked_at": iso|None}. A cached
     verdict younger than max_age_s is reused unless force=True.
     """
-    with _lock:
-        cached = dict(_login_cache)
+    cached = _login_cache_for(account)
     if (not force and cached["checked_at"] is not None
             and time.time() - cached["checked_at"] < max_age_s):
         return _login_view(cached)
@@ -76,7 +94,7 @@ def probe_login(force=False, max_age_s=600):
         wrapper = claude.run_blocking(
             "Reply with the single word: ok",
             model="haiku", system="Reply with the single word: ok",
-            timeout=_PROBE_TIMEOUT_S,
+            timeout=_PROBE_TIMEOUT_S, account=account,
         )
         ok = bool(wrapper.get("result"))
         detail = "generated a reply" if ok else "empty reply"
@@ -86,9 +104,13 @@ def probe_login(force=False, max_age_s=600):
     except Exception as e:
         ok = False
         detail = f"probe failed: {e}"[:500]
-    with _lock:
-        _login_cache.update(ok=ok, detail=detail, checked_at=time.time())
-        cached = dict(_login_cache)
+    cached = _login_cache_set(account, ok=ok, detail=detail, checked_at=time.time())
+    if ok:
+        try:
+            from . import accounts
+            accounts.report_ok(account["id"] if account else "claude-default")
+        except Exception:
+            pass
     return _login_view(cached)
 
 
@@ -115,15 +137,16 @@ def rescan():
     claude.reset_resolution()
     with _lock:
         _version_cache.clear()
-        _login_cache.update(ok=None, detail="", checked_at=None)
+        _login_caches.clear()
     return snapshot()
 
 
-def snapshot(probe=False):
+def snapshot(probe=False, account=None):
     """The full diagnosis. Cheap unless probe=True (which runs the login probe)."""
     binary = _binary_check()
     version = _version_check(binary["path"]) if binary["found"] else None
-    login = probe_login() if (probe and binary["found"]) else _login_view(dict(_login_cache))
+    login = (probe_login(account=account) if (probe and binary["found"])
+             else _login_view(_login_cache_for(account)))
 
     if not binary["found"]:
         status = "no_binary"

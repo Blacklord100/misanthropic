@@ -146,7 +146,7 @@ def fingerprint(model, system):
 class ToolRun:
     """One tool-enabled `claude` process, from spawn through parks to exit."""
 
-    def __init__(self, tools, model, system, fp=None):
+    def __init__(self, tools, model, system, fp=None, account=None):
         self.park_id = uuid.uuid4().hex
         self.tools = tools
         # The continuation-match fingerprint is computed from the request's
@@ -155,6 +155,10 @@ class ToolRun:
         self.fingerprint = fp if fp is not None else fingerprint(model, system)
         self.model = model
         self.system = system
+        # The account whose login this process runs under. Parks are
+        # account-bound by construction: a continuation rejoins the same
+        # process, so no routing decision ever applies to it.
+        self.account = account
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
         self.state = "generating"    # generating | parked | resuming | dead
@@ -188,7 +192,8 @@ class ToolRun:
         if input_format == "stream-json":
             args += ["--input-format", "stream-json"]
         self.proc, self.stderr_lines = claude_mod._spawn_claude(
-            args, prompt, cwd=None, env_extra=claude_mod.TOOL_RUN_ENV)
+            args, prompt, cwd=None, env_extra=claude_mod.TOOL_RUN_ENV,
+            account=self.account)
         self._lines = iter(self.proc.stdout)
 
     def attach_shim(self, wfile):
@@ -487,12 +492,13 @@ def _evict_over_cap():
         parked[0].destroy()
 
 
-def start_run(tools, model, system, prompt, input_format="text", fp=None):
+def start_run(tools, model, system, prompt, input_format="text", fp=None,
+              account=None):
     """Spawn a tool-enabled run; returns the ToolRun with the shim attached.
 
     Raises ClaudeError if the shim never phones home (bundled-python problems,
     firewalled loopback, ...) — surfaced as a 500."""
-    run = ToolRun(tools, model, system, fp=fp)
+    run = ToolRun(tools, model, system, fp=fp, account=account)
     run.spawn(prompt, input_format=input_format)
     if not run._shim_ready.wait(SHIM_BOOT_TIMEOUT_S):
         # Distinguish "CLI died instantly" (bad flags, logged out) from
