@@ -7,6 +7,38 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.3.0 — 2026-07-20
+Multi-backend, multi-account: run on several subscriptions and never notice a
+rate limit.
+
+- **Codex backend.** The OpenAI Codex CLI (`codex`) can now serve requests
+  next to Claude Code — same Anthropic API on the outside, your ChatGPT
+  subscription on the inside. Serves text, images, and extended thinking
+  (Codex reasoning maps to `thinking` blocks); client tools, web search and
+  key-linked sessions stay Claude-only. The system prompt rides an AGENTS.md
+  in a throwaway per-run workspace (Codex has no system-prompt flag), which
+  doubles as a privacy fence: an empty cwd means its read-only sandbox has no
+  files to pull into context.
+- **Multiple accounts + automatic failover.** Register any mix of Claude and
+  Codex accounts (Claude via per-account `CLAUDE_CONFIG_DIR` logins —
+  spike-verified isolated; Codex via `CODEX_HOME`). When the serving account
+  hits its usage limit, the next eligible account takes over — including
+  mid-request for streaming: SSE headers aren't sent until the winning
+  account produces its first event, so failover is invisible to clients.
+  Limited accounts cool down with escalating backoff (15 min → 1 h → 4 h,
+  or the explicit reset time when the error names one). Requests that need
+  Claude-only capabilities fail over among Claude accounts only, and 529
+  honestly when none is available — no silent degradation. Sessions stick to
+  the account that created them (continuity wins; if that account is deleted,
+  the key rebinds fresh).
+- **Accounts everywhere.** New dashboard **Accounts** page — per-account
+  health, serving badge, rate-limit countdowns, pin/enable/priority, usage
+  stats, and copy-paste login commands for adding accounts. Requests page
+  gains an Account column. Menu-bar gets an Account picker submenu.
+  `misanthropic accounts list|add|remove|pin|probe` in the CLI, and
+  `GET /admin/accounts` for tooling. History records which account served
+  every request.
+
 ## v1.2.0 — 2026-07-18
 The API-fidelity release: the four biggest gaps between Misanthropic and the
 hosted Messages API are closed.
