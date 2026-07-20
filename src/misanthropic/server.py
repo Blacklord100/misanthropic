@@ -763,9 +763,13 @@ class Handler(BaseHTTPRequestHandler):
             if use_web:
                 if body.get("stream"):
                     return self._stream_web(prompt, model, system, key if linked else None,
-                                            input_format, caps, fo)
+                                            input_format, caps, fo,
+                                            codex_payload=(codex_text, image_blocks),
+                                            thinking=thinking_on)
                 return self._blocking_web(prompt, model, system, key if linked else None,
-                                          input_format, caps, fo)
+                                          input_format, caps, fo,
+                                          codex_payload=(codex_text, image_blocks),
+                                          thinking=thinking_on)
 
             if body.get("stream"):
                 return self._stream_messages(prompt, model, system, key if linked else None, input_format,
@@ -815,7 +819,7 @@ class Handler(BaseHTTPRequestHandler):
     def _no_accounts_error(self, caps):
         msg = "All accounts able to serve this request are rate-limited or unavailable"
         if accounts.claude_only(caps):
-            msg += " (this request needs Claude-only capabilities: tools/web/session)"
+            msg += " (this request needs Claude-only capabilities: tools/session)"
         return (529, "overloaded_error", msg + ". Retry shortly.")
 
     def _note_backend_failure(self, acc, message):
@@ -1260,45 +1264,74 @@ class Handler(BaseHTTPRequestHandler):
             if lock:
                 lock.release()
 
-    def _web_result(self, prompt, model, system, key, input_format, caps, fo=False):
-        """(blocks, wrapper) for a web run with account routing: stateless
-        requests fail over across Claude accounts (policy permitting); linked
-        ones are bound to the session's account. Returns (result, None) or
-        (None, err_tuple)."""
+    def _web_result(self, prompt, model, system, key, input_format, caps, fo=False,
+                    codex_payload=None):
+        """Web run with account routing, dispatched per backend: claude runs
+        the WebSearch agentic loop; codex runs with web_search="live" (its
+        searches are counted into usage — no result blocks). Stateless
+        requests fail over (policy permitting); linked ones are bound to the
+        session's account (always claude — sessions are claude-only).
+        Returns (("claude", blocks, wrapper) | ("codex", wrapper, blocks), None)
+        or (None, err_tuple)."""
+        def attempt(acc):
+            if acc["backend"] == "codex":
+                text, images = codex_payload or (prompt, None)
+                wrapper, cblocks = codex_mod.run_blocking(
+                    text, model=model, system=system, images=images,
+                    web=True, account=acc)
+                return ("codex", wrapper, cblocks)
+            blocks, wrapper = self._run_web_linked(prompt, model, system,
+                                                   None, input_format, account=acc)
+            return ("claude", blocks, wrapper)
+
         if key is None:
-            return self._attempt_accounts(caps, lambda acc: self._run_web_linked(
-                prompt, model, system, None, input_format, account=acc), fo)
+            return self._attempt_accounts(caps, attempt, fo)
         acc, err = self._resolve_session_account(key, caps, fo)
         if err is not None:
             return None, err
         try:
-            result = self._run_web_linked(prompt, model, system, key,
-                                          input_format, account=acc)
+            blocks, wrapper = self._run_web_linked(prompt, model, system, key,
+                                                   input_format, account=acc)
         except BackendError as e:
             self._note_backend_failure(acc, str(e))
             status, etype = classify_claude_error(str(e))
             return None, (status, etype, str(e))
         accounts.report_ok(acc["id"])
         self._record_serving(acc)
-        return result, None
+        return ("claude", blocks, wrapper), None
 
     def _blocking_web(self, prompt, model, system, key, input_format="text",
-                      caps=None, fo=False):
-        result, err = self._web_result(prompt, model, system, key, input_format, caps, fo)
+                      caps=None, fo=False, codex_payload=None, thinking=False):
+        result, err = self._web_result(prompt, model, system, key, input_format,
+                                       caps, fo, codex_payload)
         if err is not None:
             return self._send_error(*err)
-        blocks, wrapper = result
+        if result[0] == "codex":
+            _, wrapper, cblocks = result
+            blocks = cblocks if thinking else [
+                b for b in cblocks if b.get("type") == "text"]
+            return self._send_json(200, translate.wrapper_to_message(
+                wrapper, model, blocks=blocks))
+        _, blocks, wrapper = result
         self._send_json(200, translate.web_message(blocks, wrapper, model))
 
     def _stream_web(self, prompt, model, system, key, input_format="text",
-                    caps=None, fo=False):
+                    caps=None, fo=False, codex_payload=None, thinking=False):
         # The web run is buffered (the agentic loop can't be a single live
         # stream), so do the work first; a failure here can still be a clean
         # JSON error since no SSE headers have been sent yet.
-        result, err = self._web_result(prompt, model, system, key, input_format, caps, fo)
+        result, err = self._web_result(prompt, model, system, key, input_format,
+                                       caps, fo, codex_payload)
         if err is not None:
             return self._send_error(*err)
-        blocks, wrapper = result
+        if result[0] == "codex":
+            _, wrapper, cblocks = result
+            content = [b for b in cblocks
+                       if thinking or b.get("type") == "text"]
+            if not any(b.get("type") == "text" for b in content):
+                content.append({"type": "text", "text": wrapper.get("result", "")})
+            return self._replay_codex_stream(wrapper, content, model)
+        _, blocks, wrapper = result
 
         self.close_connection = True
         self.send_response(200)
@@ -1336,6 +1369,44 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             # Translation bug post-headers: surface it as an SSE error instead
             # of silently truncating the stream after 200 has shipped.
+            try:
+                sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
+            except Exception:
+                pass
+            self._log_finalize(500, error_msg=str(e))
+
+    def _replay_codex_stream(self, wrapper, content, model):
+        """SSE replay of a buffered codex result (web or otherwise) as one
+        well-formed message — the codex twin of the claude web replay."""
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def sse(event_type, data):
+            chunk = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+            self.wfile.write(chunk.encode())
+            self.wfile.flush()
+
+        usage = wrapper.get("usage") or {}
+        response_text = "\n".join(b["text"] for b in content
+                                  if b.get("type") == "text" and b.get("text"))
+        try:
+            for event_type, data in translate.tool_sse_events(
+                    content, usage, "end_turn", model, translate._message_id(wrapper)):
+                sse(event_type, data)
+            self._log_finalize(200,
+                               in_tokens=usage.get("input_tokens"),
+                               out_tokens=usage.get("output_tokens"),
+                               web_requests=(usage.get("server_tool_use") or {}).get("web_search_requests"),
+                               cache_write=usage.get("cache_creation_input_tokens", 0),
+                               cache_read=usage.get("cache_read_input_tokens", 0),
+                               response_text=response_text)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client hung up mid-replay
+        except Exception as e:
             try:
                 sse("error", {"type": "error", "error": {"type": "api_error", "message": str(e)}})
             except Exception:

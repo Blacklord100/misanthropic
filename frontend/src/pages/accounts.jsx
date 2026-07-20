@@ -232,7 +232,7 @@ function AddAccountModal({ open, onClose, onAdded }) {
             <div class="mt-1.5 text-[11.5px] leading-relaxed text-faint">
               {backend === 'claude'
                 ? 'A Claude Pro/Max login. Tools, web search and sessions all work. Your existing login is picked up automatically; extra accounts get their own.'
-                : 'A ChatGPT login via the Codex CLI. Serves text, images and thinking; tools/web/sessions stay on Claude. Your existing codex login is picked up automatically.'}
+                : 'A ChatGPT login via the Codex CLI. Serves text, images, thinking and web search; tools/sessions stay on Claude. Your existing codex login is picked up automatically.'}
             </div>
           </div>
           <div>
@@ -293,8 +293,9 @@ export function Accounts() {
         The 1st account serves; the rest are its fallbacks, in order. What happens at a
         usage limit is the <a href="#/settings" class="font-medium" style={{ color: 'var(--color-accent-ink)' }}>
         failover policy</a>: "Auto" hops down the fallback order, "Stop" (the default)
-        waits for the limit to reset — and each API key can override it. Tools, web search
-        and session keys always serve from Claude accounts.
+        waits for the limit to reset — and each API key can override it. Tools and
+        session keys always serve from Claude accounts; web search works on both
+        backends.
       </div>
 
       <EnvironmentPanel backends={data.backends} onChanged={reload} />

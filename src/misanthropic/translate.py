@@ -232,6 +232,14 @@ def wrapper_to_message(wrapper, model_requested, blocks=None):
         content = _blocks_to_content(blocks, text)
     else:
         content = [{"type": "text", "text": text}]
+    usage_out = {
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+        "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+    }
+    if isinstance(usage.get("server_tool_use"), dict):
+        usage_out["server_tool_use"] = usage["server_tool_use"]
     return {
         "id": _message_id(wrapper),
         "type": "message",
@@ -240,12 +248,7 @@ def wrapper_to_message(wrapper, model_requested, blocks=None):
         "content": content,
         "stop_reason": wrapper.get("stop_reason") or "end_turn",
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
-            "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-        },
+        "usage": usage_out,
     }
 
 

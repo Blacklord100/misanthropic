@@ -228,13 +228,18 @@ misanthropic accounts add codex --label "Codex — personal"
 misanthropic accounts list
 ```
 
-Honest gaps: the Codex backend serves **text, images and thinking** — client
-tools, web search and key-linked sessions always run on Claude accounts (a
-request needing them 529s rather than silently degrading when every Claude
-account is limited). Codex has no system-prompt flag, so the system prompt is
-delivered via a per-run AGENTS.md workspace. Sessions stick to the account
-that created them. Cooldowns: 15 min → 1 h → 4 h escalating (or the reset
-time the error names), tunable via `MISANTHROPIC_COOLDOWN_S`.
+Honest gaps: the Codex backend serves **text, images, thinking and web
+search** — client tools and key-linked sessions always run on Claude accounts
+(a request needing them 529s rather than silently degrading when every Claude
+account is limited). Web policy applies consistently across backends: codex
+runs pass `web_search="live"` when web is on and `"disabled"` otherwise
+(codex enables web by default — the proxy always sets it explicitly), and
+codex web responses count searches in `usage.server_tool_use` but carry no
+`web_search_tool_result` blocks (codex reports only queries). Codex has no
+system-prompt flag, so the system prompt is delivered via a per-run AGENTS.md
+workspace. Sessions stick to the account that created them. Cooldowns:
+15 min → 1 h → 4 h escalating (or the reset time the error names), tunable
+via `MISANTHROPIC_COOLDOWN_S`.
 
 ### 🔄 Updates (menu-bar app)
 

@@ -112,17 +112,22 @@ _AGENTS_PREAMBLE = (
     "Answer the user directly from your knowledge. Do not run commands, do "
     "not read or write files, do not explore the filesystem.\n\n"
 )
+_AGENTS_PREAMBLE_WEB = (
+    "Answer the user directly, using web search when it helps. Do not run "
+    "commands, do not read or write files, do not explore the filesystem.\n\n"
+)
 
 
-def _workspace(system):
+def _workspace(system, web=False):
     """A throwaway per-run workspace whose AGENTS.md carries the system
     prompt (codex has no --system-prompt flag; this is the verified channel)."""
     from . import sessions
     base = sessions.CONFIG_DIR / "codex-workspace"
     os.makedirs(base, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix="run-", dir=str(base))
+    preamble = _AGENTS_PREAMBLE_WEB if web else _AGENTS_PREAMBLE
     with open(os.path.join(workdir, "AGENTS.md"), "w") as f:
-        f.write(_AGENTS_PREAMBLE + (system or claude_mod.DEFAULT_SYSTEM))
+        f.write(preamble + (system or claude_mod.DEFAULT_SYSTEM))
     return workdir
 
 
@@ -148,12 +153,17 @@ def _write_images(image_blocks, workdir):
 
 
 def run_blocking(prompt, model=None, system=None, images=None, timeout=None,
-                 account=None):
+                 account=None, web=False):
     """One codex completion. Returns (wrapper, blocks) — the wrapper shaped
     exactly like claude's (result/usage/stop_reason/session_id) so the rest of
     the pipeline can't tell backends apart; `blocks` are ordered
-    thinking/text content blocks (thinking gating happens at the server)."""
-    workdir = _workspace(system)
+    thinking/text content blocks (thinking gating happens at the server).
+
+    `web` is ALWAYS set explicitly: codex enables web search by default in
+    recent versions, so a plain completion must pass web_search="disabled" to
+    stay faithful to the bare Messages API; web requests (forced policy or the
+    per-request web_search tool) pass "live"."""
+    workdir = _workspace(system, web=web)
     try:
         args = [
             codex_bin(), "exec",
@@ -164,6 +174,7 @@ def run_blocking(prompt, model=None, system=None, images=None, timeout=None,
             "--ignore-user-config",
             "-C", workdir,
             "-c", f'model_reasoning_effort="{reasoning_effort(model)}"',
+            "-c", 'web_search="live"' if web else 'web_search="disabled"',
         ]
         codex_model = settings.get("codex_model")
         if codex_model:
@@ -180,6 +191,7 @@ def run_blocking(prompt, model=None, system=None, images=None, timeout=None,
         usage = {}
         thread_id = None
         fail = None
+        web_searches = 0
         try:
             for line in proc.stdout:
                 line = line.strip()
@@ -201,6 +213,11 @@ def run_blocking(prompt, model=None, system=None, images=None, timeout=None,
                                        "signature": ""})
                     elif itype == "agent_message":
                         blocks.append({"type": "text", "text": item.get("text", "")})
+                    elif itype == "web_search":
+                        # Codex reports only the query, no result payload, so
+                        # searches are counted into usage rather than mapped
+                        # to web_search_tool_result blocks (documented gap).
+                        web_searches += 1
                     # command_execution and anything else is dropped: the
                     # AGENTS.md preamble forbids it, and nothing a command
                     # printed belongs in an API response.
@@ -229,14 +246,18 @@ def run_blocking(prompt, model=None, system=None, images=None, timeout=None,
         # keeps its semantics.
         cached = usage.get("cached_input_tokens", 0) or 0
         total_in = usage.get("input_tokens", 0) or 0
+        usage_out = {
+            "input_tokens": max(0, total_in - cached),
+            "output_tokens": usage.get("output_tokens", 0) or 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached,
+        }
+        if web:
+            usage_out["server_tool_use"] = {"web_search_requests": web_searches,
+                                            "web_fetch_requests": 0}
         wrapper = {
             "result": "".join(b["text"] for b in blocks if b["type"] == "text"),
-            "usage": {
-                "input_tokens": max(0, total_in - cached),
-                "output_tokens": usage.get("output_tokens", 0) or 0,
-                "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": cached,
-            },
+            "usage": usage_out,
             "stop_reason": "end_turn",
             "session_id": thread_id or uuid.uuid4().hex,
         }
@@ -246,7 +267,7 @@ def run_blocking(prompt, model=None, system=None, images=None, timeout=None,
 
 
 def stream_shim(prompt, model_requested, system=None, images=None,
-                thinking=False, account=None):
+                thinking=False, account=None, web=False):
     """Codex has no token-level streaming; run fully, then replay as a single
     well-formed message in stream_events' (kind, obj) shape — a drop-in for
     the server's _open_stream, which only commits SSE after the first event
@@ -255,7 +276,7 @@ def stream_shim(prompt, model_requested, system=None, images=None,
     try:
         wrapper, blocks = run_blocking(prompt, model=model_requested,
                                        system=system, images=images,
-                                       account=account)
+                                       account=account, web=web)
     except CodexError as e:
         yield ("error", {"message": str(e)})
         return

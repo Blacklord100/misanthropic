@@ -48,12 +48,13 @@ DEFAULT_ACCOUNT = {
     "enabled": True,
 }
 
-# What each backend can serve. Tools/web/sessions are Claude-only in v1:
-# tools ride the MCP-shim parking machinery, web the WebSearch remap, and
-# sessions the --resume flow — all claude-specific.
+# What each backend can serve. Tools and sessions are Claude-only: tools ride
+# the MCP-shim parking machinery and sessions the --resume flow. Web works on
+# both — claude via WebSearch, codex via its own web_search (query-only in
+# usage, no result blocks).
 _CAPS = {
     "claude": {"tools", "web", "session", "images", "thinking", "text"},
-    "codex": {"images", "thinking", "text"},
+    "codex": {"web", "images", "thinking", "text"},
 }
 
 

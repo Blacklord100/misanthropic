@@ -162,6 +162,50 @@ def test_codex_unique_message_ids(codex_first, client):
     assert a.id != "msg_local"
 
 
+def test_codex_plain_run_has_web_disabled(codex_first, client):
+    """Codex enables web by default — a bare Messages request must explicitly
+    turn it off to stay faithful to the offline API."""
+    msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=64,
+        messages=[{"role": "user", "content": "WEBFLAG"}])
+    assert msg.content[0].text == "webflag: disabled"
+
+
+def test_forced_web_serves_from_codex(codex_first, client):
+    """Force-web + codex serving must run codex WITH web — consistency: the
+    toggle no longer benches codex."""
+    from misanthropic import claude as cl
+    cl.set_web_policy("on")   # restored by the conftest web-policy fixture
+    msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=64,
+        messages=[{"role": "user", "content": "WEBCHECK"}])
+    assert msg.content[0].text == "searched the web"
+    assert msg.usage.server_tool_use.web_search_requests == 1
+    row = history.recent(limit=1)[0]
+    assert row["backend"] == "codex"
+    assert row["mode"] == "web"
+    assert row["web_requests"] == 1
+
+
+def test_web_tool_request_serves_from_codex(codex_first, client):
+    msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=64,
+        tools=[{"type": "web_search_20260209", "name": "web_search"}],
+        messages=[{"role": "user", "content": "WEBCHECK"}])
+    assert msg.content[0].text == "searched the web"
+    assert history.recent(limit=1)[0]["backend"] == "codex"
+
+
+def test_forced_web_streaming_from_codex(codex_first, client):
+    from misanthropic import claude as cl
+    cl.set_web_policy("on")
+    with client.messages.stream(
+            model="claude-sonnet-4-6", max_tokens=64,
+            messages=[{"role": "user", "content": "WEBCHECK"}]) as stream:
+        final = stream.get_final_message()
+    assert final.content[-1].text == "searched the web"
+
+
 def test_codex_login_status_probe():
     ok, detail = codex_mod.login_status()
     # CODEX_BIN not patched here — whatever the real machine says, the probe
