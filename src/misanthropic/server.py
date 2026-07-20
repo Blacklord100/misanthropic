@@ -469,6 +469,18 @@ class Handler(BaseHTTPRequestHandler):
         snap = doctor.accounts_snapshot(probe=probe)
         status_by_id = {a["id"]: a for a in snap["accounts"]}
         stats = history.account_stats()
+        # Rows from before account tracking (account='') were all served by
+        # the default Claude login — the only account that existed. Attribute
+        # them to it so an upgrader's all-time numbers don't read zero.
+        legacy = stats.pop("", None)
+        if legacy:
+            target = next((a for a in accounts.list_accounts()
+                           if a["backend"] == "claude"
+                           and (a.get("auth") or {}).get("kind") == "default"), None)
+            if target:
+                merged = stats.setdefault(target["label"], {})
+                for k, v in legacy.items():
+                    merged[k] = merged.get(k, 0) + v
         serving = accounts.serving({"text": True})
         pinned = accounts.pinned()
         rows = []

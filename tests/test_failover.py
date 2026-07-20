@@ -5,6 +5,7 @@ Accounts use config_dir auth whose PATH names select the fake CLI's behavior
 "loggedout" → auth error, anything else → healthy.
 """
 
+import json
 import threading
 
 import pytest
@@ -63,6 +64,19 @@ def live_server(tmp_path, monkeypatch):
 def client(live_server):
     return anthropic.Anthropic(base_url=live_server, api_key="unused",
                                max_retries=0)
+
+
+def test_legacy_rows_attribute_to_default_claude(client, live_server):
+    """Pre-1.3.0 history rows (account='') must count toward the implicit
+    default Claude account's stats — they were all served by it."""
+    import urllib.request
+    history.append({"model": "sonnet", "mode": "stateless", "status": 200,
+                    "input_tokens": 10, "output_tokens": 5,
+                    "account": "", "backend": ""})
+    view = json.load(urllib.request.urlopen(live_server + "/admin/accounts"))
+    default = [a for a in view["accounts"] if a["id"] == "claude-default"][0]
+    assert default["stats"].get("requests", 0) >= 1
+    assert default["stats"].get("input_tokens", 0) >= 10
 
 
 def test_blocking_failover_to_second_account(two_accounts, client):
