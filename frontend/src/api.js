@@ -26,6 +26,17 @@ export const api = {
   rescan: () => req('/admin/doctor/rescan', { method: 'POST', body: '{}' }),
   probe: () => req('/admin/doctor/probe', { method: 'POST', body: '{}' }),
   health: () => req('/health'),
+  accounts: (probe = false) => req(`/admin/accounts${probe ? '?probe=1' : ''}`),
+  accountAdd: (label, backend) =>
+    req('/admin/accounts', { method: 'POST', body: JSON.stringify({ label, backend }) }),
+  accountUpdate: (id, patch) =>
+    req('/admin/accounts/update', { method: 'POST', body: JSON.stringify({ id, ...patch }) }),
+  accountDelete: (id) =>
+    req('/admin/accounts/delete', { method: 'POST', body: JSON.stringify({ id }) }),
+  accountPin: (id) =>
+    req('/admin/accounts/pin', { method: 'POST', body: JSON.stringify({ id }) }),
+  accountProbe: (id) =>
+    req('/admin/accounts/probe', { method: 'POST', body: JSON.stringify({ id }) }),
 }
 
 // One shared EventSource; components subscribe to change ticks. Auto-reconnects

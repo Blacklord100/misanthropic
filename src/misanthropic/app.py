@@ -119,6 +119,11 @@ def main():
             self.web_item.state = (claude.web_policy() == "on")
             self.login_item = rumps.MenuItem("Start at login", callback=self.toggle_login)
             self.login_item.state = LAUNCH_AGENT.exists()
+            # Account picker: one checkmarked item per account plus "Auto".
+            # Rebuilt on every health tick so cooldowns/serving state stay
+            # fresh without a click.
+            self.account_menu = rumps.MenuItem("Account")
+            self._rebuild_account_menu()
             # Update checking. When a newer release is found the item becomes a
             # one-click "Install vX & Relaunch" (in-place, no browser) for .app
             # installs, or a download link for pip installs. With auto-install
@@ -139,6 +144,7 @@ def main():
                 None,
                 self.toggle_item,
                 self.web_item,
+                self.account_menu,
                 rumps.MenuItem("Open dashboard", callback=self.open_dashboard),
                 rumps.MenuItem("Copy base URL", callback=self.copy_base_url),
                 None,
@@ -172,11 +178,49 @@ def main():
             if updater.auto_check_enabled():
                 self._spawn_update_check(manual=False)
 
+        # ---- account picker ----
+        def _rebuild_account_menu(self):
+            from . import accounts
+            self.account_menu.clear()
+            pinned = accounts.pinned()
+            serving = accounts.serving({"text": True})
+            auto = rumps.MenuItem("Auto (priority order)",
+                                  callback=self._on_pick_account)
+            auto.state = pinned is None
+            auto._account_id = None
+            self.account_menu.add(auto)
+            self.account_menu.add(None)
+            cds, logged_out = accounts.cooldown_state()
+            for acc in accounts.list_accounts():
+                suffix = ""
+                if serving and acc["id"] == serving["id"]:
+                    suffix = "  · serving"
+                elif acc["id"] in cds:
+                    suffix = "  · limited"
+                elif acc["id"] in logged_out:
+                    suffix = "  · logged out"
+                elif not acc.get("enabled", True):
+                    suffix = "  · disabled"
+                item = rumps.MenuItem(f"{acc['label']}{suffix}",
+                                      callback=self._on_pick_account)
+                item.state = acc["id"] == pinned
+                item._account_id = acc["id"]
+                self.account_menu.add(item)
+
+        def _on_pick_account(self, sender):
+            from . import accounts
+            accounts.set_pinned(getattr(sender, "_account_id", None))
+            self._rebuild_account_menu()
+
         # ---- environment health loop ----
         def _apply_status(self, status):
             self._doctor_status = status
             line = STATUS_LINES.get(status) or STATUS_LINES["error"]
             self.status_item.title = line.format(base=f"{HOST}:{PORT}")
+            try:
+                self._rebuild_account_menu()
+            except Exception:
+                pass  # the picker must never take down the status light
 
         def _spawn_health_check(self):
             """Re-diagnose off the main thread; the drain timer applies it.

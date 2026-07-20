@@ -9,6 +9,7 @@ function Drawer({ row, onClose }) {
     ['Key', row.key_label],
     ['Model', row.model],
     ['Mode', `${row.mode}${row.stream ? ' · streamed' : ''}`],
+    ['Account', row.account ? `${row.account} (${row.backend || 'claude'})` : '—'],
     ['Duration', fmtDur(row.duration_ms)],
     ['Hosted cost dodged', fmtUsd(row.usd)],
   ]
@@ -132,6 +133,7 @@ export function Requests() {
                 <th class="px-2 py-2.5 font-medium">Key</th>
                 <th class="px-2 py-2.5 font-medium">Model</th>
                 <th class="px-2 py-2.5 font-medium">Mode</th>
+                <th class="px-2 py-2.5 font-medium">Account</th>
                 <th class="px-2 py-2.5 text-right font-medium">Tokens</th>
                 <th class="px-2 py-2.5 text-right font-medium">Cost dodged</th>
                 <th class="px-2 py-2.5 text-right font-medium">Time</th>
@@ -149,6 +151,7 @@ export function Requests() {
                   <td class="px-2 py-2.5 font-medium">{r.key_label}</td>
                   <td class="mono px-2 py-2.5 text-mute">{r.model}</td>
                   <td class="px-2 py-2.5"><ModePill mode={r.mode} /></td>
+                  <td class="px-2 py-2.5 text-mute">{r.account || '—'}</td>
                   <td class="tnum px-2 py-2.5 text-right text-mute">
                     {fmtNum(r.input_tokens)} → {fmtNum(r.output_tokens)}
                   </td>

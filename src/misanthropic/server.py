@@ -367,6 +367,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_html(dashboard.PAGE)
         if path == "/health":
             snap = doctor.snapshot()
+            serving = accounts.serving({"text": True})
             return self._send_json(200, {
                 "status": "ok",
                 "service": "misanthropic",
@@ -374,6 +375,7 @@ class Handler(BaseHTTPRequestHandler):
                 "backend": "claude-code-cli",
                 "mode": "session" if sessions.session_mode_enabled() else "stateless",
                 "claude": snap["status"],
+                "serving_account": serving["label"] if serving else None,
             })
         if path == "/v1/models":
             q = self._query()
@@ -398,6 +400,7 @@ class Handler(BaseHTTPRequestHandler):
                     before_id=int(q["before_id"]) if q.get("before_id") else None,
                     key_label=q.get("key"), model=q.get("model"),
                     status=q.get("status"), q=q.get("q"),
+                    account=q.get("account"),
                 )
                 return self._send_json(200, {"requests": rows,
                                               "total": history.count(),
@@ -419,6 +422,9 @@ class Handler(BaseHTTPRequestHandler):
                     "default_model": claude_mod.DEFAULT_MODEL,
                     "max_concurrency": _governor.limit,
                 })
+            if path == "/admin/accounts":
+                return self._send_json(200, self._accounts_view(
+                    probe=self._query().get("probe") in ("1", "true")))
             if path == "/admin/events":
                 return self._stream_admin_events()
             return self._send_error(404, "not_found_error", f"Unknown path: {self.path}")
@@ -454,6 +460,37 @@ class Handler(BaseHTTPRequestHandler):
             pass  # client closed the tab
         finally:
             history.unsubscribe(sub)
+
+    def _accounts_view(self, probe=False):
+        """The Accounts page payload: registry rows joined with live status,
+        cooldown countdowns, serving flag, and per-account usage stats. Auth
+        secrets never leave the server — only kind and directory path."""
+        cds, _ = accounts.cooldown_state()
+        snap = doctor.accounts_snapshot(probe=probe)
+        status_by_id = {a["id"]: a for a in snap["accounts"]}
+        stats = history.account_stats()
+        serving = accounts.serving({"text": True})
+        pinned = accounts.pinned()
+        rows = []
+        for acc in accounts.list_accounts():
+            st = status_by_id.get(acc["id"], {})
+            auth = acc.get("auth") or {}
+            rows.append({
+                "id": acc["id"],
+                "label": acc["label"],
+                "backend": acc["backend"],
+                "auth_kind": auth.get("kind"),
+                "auth_path": auth.get("path"),
+                "priority": acc.get("priority", 0),
+                "enabled": acc.get("enabled", True),
+                "pinned": acc["id"] == pinned,
+                "serving": bool(serving and serving["id"] == acc["id"]),
+                "status": st.get("status", "unknown"),
+                "detail": st.get("detail", ""),
+                "cooldown": cds.get(acc["id"]),
+                "stats": stats.get(acc["label"], {}),
+            })
+        return {"accounts": rows, "backends": snap["backends"], "pinned": pinned}
 
     def _admin_state(self):
         detail = sessions.keys_detail()
@@ -506,6 +543,40 @@ class Handler(BaseHTTPRequestHandler):
                 sessions.forget_session(str(body.get("key", "")))
                 history.notify("state")
                 return self._send_json(200, {"ok": True})
+            if path == "/admin/accounts":
+                try:
+                    acc = accounts.add(str(body.get("label", "")).strip(),
+                                       str(body.get("backend", "")).strip())
+                except ValueError as e:
+                    return self._send_error(400, "invalid_request_error", str(e))
+                return self._send_json(200, {"account": acc})
+            if path == "/admin/accounts/update":
+                try:
+                    acc = accounts.update(str(body.get("id", "")),
+                                          label=body.get("label"),
+                                          priority=body.get("priority"),
+                                          enabled=body.get("enabled"))
+                except KeyError:
+                    return self._send_error(404, "not_found_error", "Unknown account.")
+                return self._send_json(200, {"account": acc})
+            if path == "/admin/accounts/delete":
+                accounts.remove(str(body.get("id", "")))
+                return self._send_json(200, {"ok": True})
+            if path == "/admin/accounts/pin":
+                pinned = accounts.set_pinned(body.get("id") or None)
+                return self._send_json(200, {"pinned": pinned})
+            if path == "/admin/accounts/probe":
+                acc = accounts.get(str(body.get("id", "")))
+                if acc is None:
+                    return self._send_error(404, "not_found_error", "Unknown account.")
+                if acc["backend"] == "claude":
+                    # A real (token-burning) generation probe — on demand only.
+                    doctor.probe_login(force=True, account=acc)
+                    st = doctor.account_status(acc)
+                else:
+                    st = doctor.account_status(acc, probe=True)
+                history.notify("state")
+                return self._send_json(200, {"id": acc["id"], **st})
             if path == "/admin/doctor/rescan":
                 return self._send_json(200, doctor.rescan())
             if path == "/admin/doctor/probe":

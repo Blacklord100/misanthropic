@@ -132,6 +132,72 @@ def login_looks_like_auth_error(detail):
     ))
 
 
+def account_status(account, probe=False):
+    """One account's health word + detail, cheaply unless probe=True.
+
+    claude accounts: binary/version + the (cached) generation probe.
+    codex accounts: binary + `codex login status` — free, so probe=True
+    always refreshes it.
+    Status words: ok | limited | logged_out | disabled | no_binary | unknown | error
+    """
+    from . import accounts as accounts_mod
+    from . import codex
+    if not account.get("enabled", True):
+        return {"status": "disabled", "detail": ""}
+    if accounts_mod.cooling(account["id"]):
+        return {"status": "limited", "detail": "usage limit cooldown"}
+    _, logged_out = accounts_mod.cooldown_state()
+    if account["id"] in logged_out:
+        return {"status": "logged_out",
+                "detail": logged_out[account["id"]].get("detail", "")}
+
+    if account["backend"] == "codex":
+        if not codex.codex_available():
+            return {"status": "no_binary", "detail": "codex CLI not found"}
+        if probe:
+            ok, detail = codex.login_status(account)
+            if ok:
+                accounts_mod.report_ok(account["id"])
+                return {"status": "ok", "detail": detail}
+            if ok is False:
+                accounts_mod.mark_logged_out(account["id"], detail)
+                return {"status": "logged_out", "detail": detail}
+            return {"status": "unknown", "detail": detail}
+        return {"status": "unknown", "detail": "not probed"}
+
+    if not claude.claude_available():
+        return {"status": "no_binary", "detail": "claude CLI not found"}
+    login = probe_login(account=account, force=probe) if probe \
+        else _login_view(_login_cache_for(account))
+    if login["ok"] is True:
+        return {"status": "ok", "detail": login["detail"]}
+    if login["ok"] is False:
+        word = "logged_out" if login_looks_like_auth_error(login["detail"]) else "error"
+        return {"status": word, "detail": login["detail"]}
+    return {"status": "unknown", "detail": "not probed"}
+
+
+def accounts_snapshot(probe=False):
+    """Per-account health for the Accounts page — cheap by default; probe=True
+    refreshes codex login states (free) but NOT claude generation probes
+    (those burn tokens; the dashboard probes a single account on demand)."""
+    from . import accounts as accounts_mod
+    from . import codex
+    out = []
+    for acc in accounts_mod.list_accounts():
+        st = account_status(acc, probe=probe and acc["backend"] == "codex")
+        out.append({"id": acc["id"], "status": st["status"], "detail": st["detail"]})
+    return {
+        "accounts": out,
+        "backends": {
+            "claude": {"available": claude.claude_available(),
+                       "path": claude.claude_bin() if claude.claude_available() else None},
+            "codex": {"available": codex.codex_available(),
+                      "path": codex.codex_bin() if codex.codex_available() else None},
+        },
+    }
+
+
 def rescan():
     """Forget every cache and re-run discovery (dashboard 'Re-scan' button)."""
     claude.reset_resolution()
