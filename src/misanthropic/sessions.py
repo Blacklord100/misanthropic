@@ -108,6 +108,26 @@ def create_key(label=""):
     return key
 
 
+def key_failover(key):
+    """This key's failover override: "on" | "off" | None (inherit the global
+    failover_policy setting). Lets each connected project decide whether its
+    requests may hop accounts on a usage limit."""
+    with _file_lock:
+        return _read_keys().get(key, {}).get("failover")
+
+
+def set_key_failover(key, mode):
+    with _file_lock:
+        store = _read_keys()
+        if key not in store:
+            raise KeyError(key)
+        if mode in ("on", "off"):
+            store[key]["failover"] = mode
+        else:
+            store[key].pop("failover", None)  # "default" = inherit global
+        _write_json(KEYS_FILE, store)
+
+
 def remove_key(key):
     with _file_lock:
         store = _read_keys()
@@ -126,12 +146,22 @@ def get_session_id(key):
     with _file_lock:
         return _read_json(SESSIONS_FILE, {}).get(key, {}).get("session_id")
 
-def record_session(key, session_id):
+
+def get_session_account(key):
+    """Which account this key's session lives on (sessions are account-bound:
+    a claude session id only resumes under the login that created it)."""
+    with _file_lock:
+        return _read_json(SESSIONS_FILE, {}).get(key, {}).get("account_id")
+
+
+def record_session(key, session_id, account_id=None):
     """Store/refresh the session id for a key and bump its turn counter."""
     with _file_lock:
         sessions = _read_json(SESSIONS_FILE, {})
         rec = sessions.get(key, {})
         rec["session_id"] = session_id
+        if account_id:
+            rec["account_id"] = account_id
         rec["turns"] = rec.get("turns", 0) + 1
         rec["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         sessions[key] = rec

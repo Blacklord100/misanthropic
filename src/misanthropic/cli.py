@@ -4,6 +4,7 @@
   misanthropic chat "..." [--model --system]    one-off completion (quick test)
   misanthropic keys add|remove|list [KEY]       manage approved keys (= sessions)
   misanthropic sessions list|forget [KEY]       inspect / reset key->session links
+  misanthropic accounts ACTION [ID]             manage backend accounts (claude/codex)
   misanthropic savings                          what you'd have paid on the hosted API
 
 With no subcommand, `misanthropic` starts the server.
@@ -13,7 +14,7 @@ import argparse
 import os
 import sys
 
-from . import __version__, savings, server, sessions, translate
+from . import __version__, accounts, doctor, savings, server, sessions, translate
 from .claude import ClaudeError, DEFAULT_MODEL, run_blocking
 
 
@@ -54,6 +55,71 @@ def _cmd_sessions(args):
             return 1
         sessions.forget_session(args.key)
         print(f"session forgotten; next request under '{args.key}' starts fresh.")
+    return 0
+
+
+def _cmd_accounts(args):
+    if args.action == "list":
+        cds, logged_out = accounts.cooldown_state()
+        pinned = accounts.pinned()
+        serving = accounts.serving({"text": True})
+        for acc in accounts.list_accounts():
+            marks = []
+            if serving and acc["id"] == serving["id"]:
+                marks.append("serving")
+            if acc["id"] == pinned:
+                marks.append("pinned")
+            if not acc.get("enabled", True):
+                marks.append("disabled")
+            if acc["id"] in cds:
+                marks.append(f"limited ~{cds[acc['id']]['seconds_left']}s")
+            if acc["id"] in logged_out:
+                marks.append("logged out")
+            print(f"{acc['id']}\t{acc['backend']}\t{acc['label']}"
+                  f"\t{', '.join(marks) or '-'}")
+        return 0
+    if args.action == "add":
+        if args.id not in ("claude", "codex"):
+            print("usage: misanthropic accounts add claude|codex [--label L]",
+                  file=sys.stderr)
+            return 1
+        acc = accounts.add(args.label or "", args.id)
+        print(f"added {acc['backend']} account {acc['id']} ({acc['label']})")
+        auth = acc.get("auth") or {}
+        if acc["backend"] == "codex":
+            print(f"log it in with:\n  CODEX_HOME={auth.get('path')} codex login")
+        else:
+            print(f"log it in with:\n  CLAUDE_CONFIG_DIR={auth.get('path')} claude "
+                  f"# then /login inside")
+        return 0
+    if not args.id:
+        print(f"usage: misanthropic accounts {args.action} <id>", file=sys.stderr)
+        return 1
+    acc = accounts.get(args.id)
+    if args.action != "unpin" and acc is None:
+        print(f"unknown account: {args.id}", file=sys.stderr)
+        return 1
+    if args.action == "remove":
+        accounts.remove(args.id)
+        print("removed.")
+    elif args.action == "pin":
+        accounts.set_pinned(args.id)
+        print(f"pinned {acc['label']} — it now serves first.")
+    elif args.action == "unpin":
+        accounts.set_pinned(None)
+        print("unpinned — priority order applies.")
+    elif args.action == "enable":
+        accounts.update(args.id, enabled=True)
+        print("enabled.")
+    elif args.action == "disable":
+        accounts.update(args.id, enabled=False)
+        print("disabled.")
+    elif args.action == "probe":
+        if acc["backend"] == "claude":
+            doctor.probe_login(force=True, account=acc)
+        st = doctor.account_status(acc, probe=acc["backend"] == "codex")
+        print(f"{acc['label']}: {st['status']}"
+              + (f" — {st['detail']}" if st.get("detail") else ""))
     return 0
 
 
@@ -99,6 +165,13 @@ def main(argv=None):
     p_sessions.add_argument("action", choices=["list", "forget"])
     p_sessions.add_argument("key", nargs="?", help="The API key")
 
+    p_accounts = sub.add_parser("accounts", help="Manage backend accounts (claude/codex)")
+    p_accounts.add_argument("action", choices=["list", "add", "remove", "pin",
+                                               "unpin", "enable", "disable", "probe"])
+    p_accounts.add_argument("id", nargs="?",
+                            help="Account id (or backend name for `add`)")
+    p_accounts.add_argument("--label", help="Display label for `add`")
+
     sub.add_parser("savings", help="Show what you'd have paid on the hosted API")
 
     args = parser.parse_args(argv)
@@ -123,6 +196,9 @@ def main(argv=None):
 
     if args.cmd == "sessions":
         return _cmd_sessions(args)
+
+    if args.cmd == "accounts":
+        return _cmd_accounts(args)
 
     if args.cmd == "savings":
         return _cmd_savings()

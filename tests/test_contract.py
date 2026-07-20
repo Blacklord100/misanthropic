@@ -18,10 +18,20 @@ from misanthropic import claude as claude_mod
 from misanthropic import server
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 
 args = sys.argv[1:]
 prompt = sys.stdin.read()
+
+# Multi-account tests select behavior via the account's CLAUDE_CONFIG_DIR:
+# a path containing "limited" acts rate-limited, "loggedout" acts logged out.
+cfgdir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+if "limited" in cfgdir:
+    sys.stderr.write("You've reached your usage limit for this account.\n")
+    sys.exit(1)
+if "loggedout" in cfgdir:
+    sys.stderr.write("Not logged in. Please run /login.\n")
+    sys.exit(1)
 
 if "AUTHFAIL" in prompt:
     sys.stderr.write("Invalid API key. Please run /login to authenticate.\n")

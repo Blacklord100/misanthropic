@@ -10,7 +10,7 @@ no API key, no per-token bill, no call to anyone's server but your own.
 
 **[⬇ Download for macOS](https://github.com/Blacklord100/misanthropic/releases/latest)** · [Install](#install) · [Quick start](#quick-start) · [Tips & tricks](#tips--tricks) · [☕ Buy me a coffee](https://paypal.me/Blacklord100)
 
-*For personal use only — don't stand it up as a shared server. v1.2.0 · [CHANGELOG](CHANGELOG.md) · formerly Breakthrough.*
+*For personal use only — don't stand it up as a shared server. v1.3.0 · [CHANGELOG](CHANGELOG.md) · formerly Breakthrough.*
 
 </div>
 
@@ -205,6 +205,37 @@ not). *Honest gaps from CLI output: `encrypted_content` is synthesized (not reus
 against the hosted API), `page_age`/`citations` are `null`, and web responses are
 buffered.*
 
+### ⇄ Multiple accounts & the Codex backend
+
+One subscription runs out? Register more — any mix of **Claude** logins and
+**OpenAI Codex** (ChatGPT) logins. What happens at a usage limit is the
+**failover policy** (Settings): **Stop** (the default) fails the request with
+a clean 529 and waits for the limit to reset; **Auto** hops to the next
+eligible account — streaming included: the stream doesn't start until a
+working account produced its first token, so clients never see the switch.
+Each API key can override the policy, so one project can fail over while
+another insists on its account (for a session key, failing over starts a
+fresh conversation). Pin an account to force it, or let priority order
+decide. The dashboard's **Accounts** page shows every account's health, who's
+serving, rate-limit countdowns, and per-account usage; the menu-bar gets a
+picker, the CLI gets `misanthropic accounts`.
+
+```bash
+misanthropic accounts add claude --label "Claude — work"
+# → CLAUDE_CONFIG_DIR=~/.misanthropic/claude/<id> claude   # log it in once
+misanthropic accounts add codex --label "Codex — personal"
+# → CODEX_HOME=~/.misanthropic/codex/<id> codex login
+misanthropic accounts list
+```
+
+Honest gaps: the Codex backend serves **text, images and thinking** — client
+tools, web search and key-linked sessions always run on Claude accounts (a
+request needing them 529s rather than silently degrading when every Claude
+account is limited). Codex has no system-prompt flag, so the system prompt is
+delivered via a per-run AGENTS.md workspace. Sessions stick to the account
+that created them. Cooldowns: 15 min → 1 h → 4 h escalating (or the reset
+time the error names), tunable via `MISANTHROPIC_COOLDOWN_S`.
+
 ### 🔄 Updates (menu-bar app)
 
 The app checks a public manifest (`appcast.json`) in the background and never updates
@@ -231,6 +262,9 @@ with `MISANTHROPIC_APPCAST_URL`.
 | `MISANTHROPIC_TOOL_PARK_TTL_MS` | `600000` | How long a parked tool-loop process waits for its `tool_result`. |
 | `MISANTHROPIC_MAX_PARKED` | `8` | Cap on simultaneously parked tool runs (oldest evicted). |
 | `MISANTHROPIC_TOOL_MAX_TURNS` | `50` | Runaway guard on a single tool run's agentic turns. |
+| `CODEX_BIN` | auto-discovered | Full path to `codex` if not on PATH. |
+| `MISANTHROPIC_CODEX_TIMEOUT_MS` | `300000` | Per-request timeout for codex runs. |
+| `MISANTHROPIC_COOLDOWN_S` / `_MAX_S` | `900` / `14400` | Rate-limit cooldown base / cap per account. |
 | `MISANTHROPIC_APPCAST_URL` | public feed | Override the update-check manifest. |
 
 ### 📡 Endpoints
@@ -244,6 +278,7 @@ with `MISANTHROPIC_APPCAST_URL`.
 | `GET`  | `/` | Web dashboard. |
 | `GET`  | `/admin/state` · `/admin/requests` | Dashboard state / activity log. **Localhost-only.** |
 | `POST` | `/admin/keys` · `/admin/keys/delete` · `/admin/sessions/forget` | Manage keys/sessions. **Localhost-only.** |
+| `GET/POST` | `/admin/accounts` (+ `/update` `/delete` `/pin` `/probe`) | Manage backend accounts. **Localhost-only.** |
 
 ---
 

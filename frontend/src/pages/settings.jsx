@@ -90,6 +90,19 @@ export function Settings() {
           />
         </Row>
         <Row
+          title="Account failover"
+          hint='"Auto" hops to the next eligible account when the serving one hits its usage limit. "Stop" fails the request (529) and waits for the limit to reset. Individual API keys can override this on the Keys page.'
+        >
+          <Segmented
+            value={data.settings?.failover_policy === 'auto' ? 'auto' : 'off'}
+            onChange={(v) => save({ failover_policy: v }, `Failover: ${v === 'auto' ? 'auto' : 'stop'}`)}
+            options={[
+              { value: 'off', label: 'Stop' },
+              { value: 'auto', label: 'Auto' },
+            ]}
+          />
+        </Row>
+        <Row
           title="Enforce max_tokens"
           hint="Truncate responses at each request's max_tokens. The count is a ~4 chars/token estimate (the CLI exposes no real limit), so this is off by default. stop_sequences are always honored."
         >

@@ -5,6 +5,7 @@ import { Dot, ToastHost, useToast } from './components.jsx'
 import { Overview } from './pages/overview.jsx'
 import { Requests } from './pages/requests.jsx'
 import { Keys } from './pages/keys.jsx'
+import { Accounts } from './pages/accounts.jsx'
 import { Settings } from './pages/settings.jsx'
 import { Doctor } from './pages/doctor.jsx'
 import { Wizard } from './pages/wizard.jsx'
@@ -13,6 +14,7 @@ const PAGES = [
   { path: 'overview', label: 'Overview', icon: '◈', el: Overview },
   { path: 'requests', label: 'Requests', icon: '≡', el: Requests },
   { path: 'keys', label: 'Keys', icon: '⌘', el: Keys },
+  { path: 'accounts', label: 'Accounts', icon: '⇄', el: Accounts },
   { path: 'settings', label: 'Settings', icon: '⚙', el: Settings },
   { path: 'doctor', label: 'Doctor', icon: '＋', el: Doctor },
 ]
