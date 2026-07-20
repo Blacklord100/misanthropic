@@ -7,16 +7,16 @@ import { Requests } from './pages/requests.jsx'
 import { Keys } from './pages/keys.jsx'
 import { Accounts } from './pages/accounts.jsx'
 import { Settings } from './pages/settings.jsx'
-import { Doctor } from './pages/doctor.jsx'
 import { Wizard } from './pages/wizard.jsx'
 
+// The old Doctor page lives inside Accounts now (its Environment panel);
+// #/doctor deep links land there too.
 const PAGES = [
   { path: 'overview', label: 'Overview', icon: '◈', el: Overview },
   { path: 'requests', label: 'Requests', icon: '≡', el: Requests },
   { path: 'keys', label: 'Keys', icon: '⌘', el: Keys },
-  { path: 'accounts', label: 'Accounts', icon: '⇄', el: Accounts },
+  { path: 'accounts', label: 'Accounts', icon: '⇄', el: Accounts, aliases: ['doctor'] },
   { path: 'settings', label: 'Settings', icon: '⚙', el: Settings },
-  { path: 'doctor', label: 'Doctor', icon: '＋', el: Doctor },
 ]
 
 function useRoute() {
@@ -116,7 +116,8 @@ export function App() {
   }, [])
 
   const routeBase = route.split('?')[0]
-  const Page = (PAGES.find((p) => p.path === routeBase) || PAGES[0]).el
+  const Page = (PAGES.find((p) => p.path === routeBase || p.aliases?.includes(routeBase))
+    || PAGES[0]).el
   const claudeStatus = health?.claude || 'unknown'
 
   if (state?.first_run && routeBase !== 'wizard') {
@@ -150,7 +151,7 @@ export function App() {
               >
                 <span class="w-4 text-center text-[11px] opacity-70">{p.icon}</span>
                 {p.label}
-                {p.path === 'doctor' && claudeStatus !== 'ok' && claudeStatus !== 'unknown' && (
+                {p.path === 'accounts' && claudeStatus !== 'ok' && claudeStatus !== 'unknown' && (
                   <span class="ml-auto"><Dot tone={STATUS_TONE[claudeStatus] || 'warn'} pulse /></span>
                 )}
               </a>

@@ -49,9 +49,11 @@ function LoginHint({ acc }) {
 function AccountCard({ acc, onChanged }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
-  const [showLogin, setShowLogin] = useState(false)
   const st = STATUS[acc.status] || STATUS.unknown
   const stats = acc.stats || {}
+  // A logged-out isolated account needs its terminal login — show the
+  // command without a click. Default-login accounts never need it.
+  const needsLogin = acc.status === 'logged_out' && acc.auth_path
 
   const act = async (fn, msg) => {
     setBusy(true)
@@ -59,7 +61,7 @@ function AccountCard({ acc, onChanged }) {
   }
 
   return (
-    <div class="panel p-4">
+    <div class="panel p-4" style={acc.enabled ? {} : { opacity: 0.6 }}>
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">
           <div class="flex items-center gap-2">
@@ -92,15 +94,23 @@ function AccountCard({ acc, onChanged }) {
         </div>
         <div class="flex shrink-0 flex-col items-end gap-1.5">
           <div class="flex gap-1.5">
-            <button class="btn btn-ghost !h-6 text-[11px]" disabled={busy}
+            {acc.enabled ? (
+              <button class="btn !h-7 text-[11.5px]" disabled={busy}
+                      onClick={() => act(() => api.accountUpdate(acc.id, { enabled: false }),
+                                         `${acc.label} disabled`)}>
+                Disable this one
+              </button>
+            ) : (
+              <button class="btn btn-primary !h-7 text-[11.5px]" disabled={busy}
+                      onClick={() => act(() => api.accountUpdate(acc.id, { enabled: true }),
+                                         `${acc.label} activated`)}>
+                Activate
+              </button>
+            )}
+            <button class="btn btn-ghost !h-7 text-[11.5px]" disabled={busy}
                     onClick={() => act(() => api.accountPin(acc.pinned ? null : acc.id),
-                                       acc.pinned ? 'Unpinned' : `Pinned ${acc.label}`)}>
-              {acc.pinned ? 'Unpin' : 'Pin'}
-            </button>
-            <button class="btn btn-ghost !h-6 text-[11px]" disabled={busy}
-                    onClick={() => act(() => api.accountUpdate(acc.id, { enabled: !acc.enabled }),
-                                       acc.enabled ? 'Disabled' : 'Enabled')}>
-              {acc.enabled ? 'Disable' : 'Enable'}
+                                       acc.pinned ? 'Unpinned' : `${acc.label} serves first now`)}>
+              {acc.pinned ? 'Unpin' : 'Use first'}
             </button>
           </div>
           <div class="flex gap-1.5">
@@ -110,10 +120,6 @@ function AccountCard({ acc, onChanged }) {
                       toast(`${acc.label}: ${(STATUS[r.status] || STATUS.unknown).text}`)
                     })}>
               Verify
-            </button>
-            <button class="btn btn-ghost !h-6 text-[11px]"
-                    onClick={() => setShowLogin((s) => !s)}>
-              Login…
             </button>
             {acc.id !== 'claude-default' && (
               <button class="btn btn-ghost !h-6 text-[11px]" disabled={busy}
@@ -125,7 +131,41 @@ function AccountCard({ acc, onChanged }) {
           </div>
         </div>
       </div>
-      {showLogin && <LoginHint acc={acc} />}
+      {needsLogin && <LoginHint acc={acc} />}
+    </div>
+  )
+}
+
+function EnvironmentPanel({ backends, onChanged }) {
+  const toast = useToast()
+  if (!backends) return null
+  const rows = [
+    ['Claude Code', backends.claude],
+    ['Codex CLI', backends.codex],
+  ]
+  return (
+    <div class="panel mb-4 overflow-hidden">
+      <div class="flex items-center justify-between border-b border-line px-5 py-3">
+        <div class="text-[12.5px] font-medium text-mute">Environment</div>
+        <button class="btn btn-ghost !h-6 text-[11px]"
+                onClick={async () => { await api.rescan(); toast('Environment re-scanned'); onChanged() }}>
+          Re-scan
+        </button>
+      </div>
+      {rows.map(([name, b]) => (
+        <div key={name} class="flex items-center gap-3 border-b border-line px-5 py-2.5 text-[12.5px] last:border-0">
+          <Dot tone={b?.available ? 'ok' : 'err'} />
+          <span class="w-24 font-medium">{name}</span>
+          {b?.available ? (
+            <>
+              <span class="mono truncate text-[11.5px] text-mute">{b.path}</span>
+              <span class="ml-auto shrink-0 text-[11.5px] text-faint">{b.version || ''}</span>
+            </>
+          ) : (
+            <span class="text-mute">not found — install it, then Re-scan</span>
+          )}
+        </div>
+      ))}
     </div>
   )
 }
@@ -134,14 +174,21 @@ function AddAccountModal({ open, onClose, onAdded }) {
   const toast = useToast()
   const [backend, setBackend] = useState('claude')
   const [label, setLabel] = useState('')
+  const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState(null)
-  useEffect(() => { if (open) { setCreated(null); setLabel('') } }, [open])
+  useEffect(() => { if (open) { setCreated(null); setLabel(''); setBusy(false) } }, [open])
 
   const add = async () => {
-    const r = await api.accountAdd(label || undefined, backend)
-    setCreated(r.account)
-    toast('Account added — now log it in')
-    onAdded()
+    setBusy(true)
+    try {
+      // The server detects an existing login automatically (the first account
+      // per backend claims ~/.claude / ~/.codex) and probes it right away.
+      const r = await api.accountAdd(label || undefined, backend)
+      setCreated({ ...r.account, status: r.status, detail: r.detail })
+      toast(r.status === 'ok' ? 'Account added — logged in and ready'
+                              : 'Account added — needs a login')
+      onAdded()
+    } finally { setBusy(false) }
   }
 
   return (
@@ -155,8 +202,8 @@ function AddAccountModal({ open, onClose, onAdded }) {
                                  { value: 'codex', label: 'Codex' }]} />
             <div class="mt-1.5 text-[11.5px] leading-relaxed text-faint">
               {backend === 'claude'
-                ? 'Another Claude Pro/Max login. Tools, web search and sessions all work.'
-                : 'A ChatGPT login via the Codex CLI. Serves text, images and thinking; tools/web/sessions stay on Claude.'}
+                ? 'A Claude Pro/Max login. Tools, web search and sessions all work. Your existing login is picked up automatically; extra accounts get their own.'
+                : 'A ChatGPT login via the Codex CLI. Serves text, images and thinking; tools/web/sessions stay on Claude. Your existing codex login is picked up automatically.'}
             </div>
           </div>
           <div>
@@ -166,15 +213,28 @@ function AddAccountModal({ open, onClose, onAdded }) {
           </div>
           <div class="flex justify-end gap-2">
             <button class="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button class="btn btn-primary" onClick={add}>Add account</button>
+            <button class="btn btn-primary" disabled={busy} onClick={add}>
+              {busy ? 'Checking login…' : 'Add account'}
+            </button>
+          </div>
+        </div>
+      ) : created.status === 'ok' ? (
+        <div class="grid gap-3">
+          <div class="text-[12.5px]">
+            <span class="font-semibold">{created.label}</span> detected your existing
+            login and is <span class="font-medium" style={{ color: 'var(--color-ok)' }}>ready to serve</span>.
+            Nothing else to do.
+          </div>
+          <div class="flex justify-end">
+            <button class="btn btn-primary" onClick={onClose}>Done</button>
           </div>
         </div>
       ) : (
         <div class="grid gap-3">
           <div class="text-[12.5px]">
-            <span class="font-semibold">{created.label}</span> is registered but not
-            logged in yet. Run this in a terminal, complete the login, then hit Verify
-            on its card:
+            <span class="font-semibold">{created.label}</span> is registered but has
+            its own separate login. Run this in a terminal, complete the login, then
+            hit Verify on its card:
           </div>
           <LoginHint acc={{ backend: created.backend, auth_path: created.auth?.path }} />
           <div class="flex justify-end">
@@ -207,6 +267,8 @@ export function Accounts() {
         waits for the limit to reset — and each API key can override it. Tools, web search
         and session keys always serve from Claude accounts.
       </div>
+
+      <EnvironmentPanel backends={data.backends} onChanged={reload} />
 
       {rows.length === 0 ? (
         <EmptyState icon="⇄" title="No accounts" hint="Add a Claude or Codex account to get started." />

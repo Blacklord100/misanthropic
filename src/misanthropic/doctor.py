@@ -180,20 +180,31 @@ def account_status(account, probe=False):
 def accounts_snapshot(probe=False):
     """Per-account health for the Accounts page — cheap by default; probe=True
     refreshes codex login states (free) but NOT claude generation probes
-    (those burn tokens; the dashboard probes a single account on demand)."""
+    (those burn tokens; the dashboard probes a single account on demand).
+
+    `backends` carries the environment/doctor picture (binary, version, and
+    the claude login verdict) — the Accounts page is the Doctor page now."""
     from . import accounts as accounts_mod
     from . import codex
     out = []
     for acc in accounts_mod.list_accounts():
         st = account_status(acc, probe=probe and acc["backend"] == "codex")
         out.append({"id": acc["id"], "status": st["status"], "detail": st["detail"]})
+    claude_ok = claude.claude_available()
+    codex_ok = codex.codex_available()
+    env = snapshot()  # cheap: binary + cached version + cached login verdict
     return {
         "accounts": out,
         "backends": {
-            "claude": {"available": claude.claude_available(),
-                       "path": claude.claude_bin() if claude.claude_available() else None},
-            "codex": {"available": codex.codex_available(),
-                      "path": codex.codex_bin() if codex.codex_available() else None},
+            "claude": {"available": claude_ok,
+                       "path": claude.claude_bin() if claude_ok else None,
+                       "source": claude.resolution_source() if claude_ok else None,
+                       "version": env.get("cli_version"),
+                       "status": env.get("status"),
+                       "login_detail": (env.get("login") or {}).get("detail", "")},
+            "codex": {"available": codex_ok,
+                      "path": codex.codex_bin() if codex_ok else None,
+                      "version": _version_check(codex.codex_bin()) if codex_ok else None},
         },
     }
 

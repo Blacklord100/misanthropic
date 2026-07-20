@@ -21,8 +21,18 @@ def test_add_and_priority_order(tmp_path):
     ids = [x["id"] for x in accounts.list_accounts()]
     assert ids[0] == "claude-default"          # priority 0
     assert set(ids[1:]) == {a["id"], b["id"]}
-    assert b["auth"]["kind"] == "codex_home"
+    # The default claude login is already claimed (implicit account), so a
+    # second claude account gets its own config dir; the FIRST codex account
+    # claims the user's existing ~/.codex login automatically.
     assert a["auth"]["kind"] == "config_dir"
+    assert b["auth"]["kind"] == "codex_default"
+
+
+def test_second_codex_account_gets_own_home(tmp_path):
+    accounts.add("Codex one", "codex")
+    c = accounts.add("Codex two", "codex")
+    assert c["auth"]["kind"] == "codex_home"
+    assert c["auth"]["path"]
 
 
 def test_registry_file_is_private(tmp_path):

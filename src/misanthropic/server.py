@@ -558,7 +558,16 @@ class Handler(BaseHTTPRequestHandler):
                                        str(body.get("backend", "")).strip())
                 except ValueError as e:
                     return self._send_error(400, "invalid_request_error", str(e))
-                return self._send_json(200, {"account": acc})
+                # Fully automatic: probe the new account right away, so the UI
+                # can say "ready" (existing login detected) or show the login
+                # command. Codex probing is free; a claude probe is one tiny
+                # generation (and fails fast when the dir isn't logged in).
+                if acc["backend"] == "claude":
+                    doctor.probe_login(force=True, account=acc)
+                    st = doctor.account_status(acc)
+                else:
+                    st = doctor.account_status(acc, probe=True)
+                return self._send_json(200, {"account": acc, **st})
             if path == "/admin/accounts/update":
                 try:
                     acc = accounts.update(str(body.get("id", "")),

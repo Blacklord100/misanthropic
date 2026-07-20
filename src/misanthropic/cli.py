@@ -86,7 +86,9 @@ def _cmd_accounts(args):
         acc = accounts.add(args.label or "", args.id)
         print(f"added {acc['backend']} account {acc['id']} ({acc['label']})")
         auth = acc.get("auth") or {}
-        if acc["backend"] == "codex":
+        if auth.get("kind") in ("default", "codex_default"):
+            print("using your existing login — ready to serve.")
+        elif acc["backend"] == "codex":
             print(f"log it in with:\n  CODEX_HOME={auth.get('path')} codex login")
         else:
             print(f"log it in with:\n  CLAUDE_CONFIG_DIR={auth.get('path')} claude "

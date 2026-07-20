@@ -116,12 +116,22 @@ def add(label, backend, auth=None):
         raise ValueError(f"unknown backend: {backend}")
     account_id = uuid.uuid4().hex[:12]
     from . import sessions
-    if backend == "codex" and not (auth or {}).get("path"):
-        auth = {"kind": "codex_home",
-                "path": str(sessions.CONFIG_DIR / "codex" / account_id)}
-    elif backend == "claude" and auth is None:
-        auth = {"kind": "config_dir",
-                "path": str(sessions.CONFIG_DIR / "claude" / account_id)}
+    if auth is None:
+        # Fully automatic: the FIRST account of a backend claims the user's
+        # existing login (~/.claude keychain / ~/.codex) — no terminal step.
+        # Only additional accounts need their own isolated auth dir.
+        existing_kinds = {(a["backend"], (a.get("auth") or {}).get("kind"))
+                          for a in list_accounts()}
+        if backend == "codex":
+            auth = ({"kind": "codex_default"}
+                    if ("codex", "codex_default") not in existing_kinds
+                    else {"kind": "codex_home",
+                          "path": str(sessions.CONFIG_DIR / "codex" / account_id)})
+        else:
+            auth = ({"kind": "default"}
+                    if ("claude", "default") not in existing_kinds
+                    else {"kind": "config_dir",
+                          "path": str(sessions.CONFIG_DIR / "claude" / account_id)})
     if auth.get("path"):
         os.makedirs(os.path.expanduser(auth["path"]), exist_ok=True)
     acc = {"id": account_id, "label": label or f"{backend} account",
@@ -350,7 +360,7 @@ def child_env_overlay(account):
         return {"CLAUDE_CONFIG_DIR": os.path.expanduser(auth.get("path", ""))}
     if kind == "codex_home":
         return {"CODEX_HOME": os.path.expanduser(auth.get("path", ""))}
-    return {}  # "default"
+    return {}  # "default" / "codex_default": the user's existing login
 
 
 def _notify():
