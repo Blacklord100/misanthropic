@@ -24,7 +24,7 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 _lock = threading.Lock()
 
 _ALLOWED = {"default_model", "web_policy", "onboarded", "retention_days",
-            "max_concurrency", "enforce_max_tokens"}
+            "max_concurrency", "enforce_max_tokens", "codex_model"}
 
 
 def _settings_path():

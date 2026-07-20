@@ -37,6 +37,7 @@ from . import (__version__, accounts, dashboard, doctor, history, limits,
                models, request_log, savings, sessions, settings, tool_bridge,
                translate)
 from . import claude as claude_mod
+from . import codex as codex_mod
 from .claude import ClaudeError, resolve_web, run_blocking, run_web, stream_events, web_policy
 from .errors import BackendError
 
@@ -564,6 +565,11 @@ class Handler(BaseHTTPRequestHandler):
         # build_cli_input picks the wire format: plain text by default, or
         # stream-json (Anthropic content blocks) when the request carries images.
         input_format, prompt = translate.build_cli_input(messages)
+        # The codex backend takes a different payload shape: flat text plus
+        # image blocks passed as files. Cheap to precompute for both.
+        msgs = [m for m in messages if isinstance(m, dict)]
+        codex_text = translate.messages_to_prompt(msgs)
+        image_blocks = list(translate._iter_image_blocks(msgs))
         linked = sessions.session_mode_enabled()  # key-linked session?
 
         # Decide web per request: the "auto" policy honors the web_search tool in
@@ -637,17 +643,25 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("stream"):
                 return self._stream_messages(prompt, model, system, key if linked else None, input_format,
                                              stop_seqs=stop_seqs, max_toks=max_toks,
-                                             thinking=thinking_on, caps=caps)
+                                             thinking=thinking_on, caps=caps,
+                                             codex_payload=(codex_text, image_blocks))
 
             if linked:
                 return self._blocking_session(prompt, model, system, key, input_format,
                                               stop_seqs=stop_seqs, max_toks=max_toks,
                                               thinking=thinking_on, caps=caps)
 
-            # Stateless blocking: full failover across eligible accounts.
+            # Stateless blocking: full failover across eligible accounts,
+            # dispatched per backend.
             def attempt(acc):
                 blocks = None
-                if thinking_on:
+                if acc["backend"] == "codex":
+                    wrapper, cblocks = codex_mod.run_blocking(
+                        codex_text, model=model, system=system,
+                        images=image_blocks, account=acc)
+                    blocks = cblocks if thinking_on else [
+                        b for b in cblocks if b.get("type") == "text"]
+                elif thinking_on:
                     wrapper, blocks = run_blocking(prompt, model=model, system=system,
                                                    input_format=input_format,
                                                    collect_blocks=True, account=acc)
@@ -1202,7 +1216,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
 
     def _stream_messages(self, prompt, model, system, key, input_format="text",
-                         stop_seqs=None, max_toks=None, thinking=False, caps=None):
+                         stop_seqs=None, max_toks=None, thinking=False, caps=None,
+                         codex_payload=None):
         """Streaming with account routing. _open_stream pulls each candidate
         generator to its first real event BEFORE any bytes ship, so a
         rate-limited account fails over invisibly; only a committed stream
@@ -1219,11 +1234,23 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 candidates = accounts.eligible(caps)
             resume_id = sessions.get_session_id(key) if key else None
-            acc, events, err = self._open_stream(candidates, lambda a: stream_events(
-                prompt, model=model, system=system,
-                resume=resume_id, persist=bool(key),
-                cwd=str(sessions.WORKSPACE) if key else None,
-                input_format=input_format, account=a))
+
+            def make_gen(a):
+                if a["backend"] == "codex":
+                    # Codex "streaming" is a buffered single-message replay —
+                    # the whole run happens before the first yielded event, so
+                    # _open_stream's failover covers it for free.
+                    text, images = codex_payload or (prompt, None)
+                    return codex_mod.stream_shim(text, model, system=system,
+                                                 images=images, thinking=thinking,
+                                                 account=a)
+                return stream_events(
+                    prompt, model=model, system=system,
+                    resume=resume_id, persist=bool(key),
+                    cwd=str(sessions.WORKSPACE) if key else None,
+                    input_format=input_format, account=a)
+
+            acc, events, err = self._open_stream(candidates, make_gen)
             if events is None:
                 return self._send_error(*err)
             self._emit_stream(events, key, resume_id, acc,
