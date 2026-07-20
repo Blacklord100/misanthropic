@@ -7,6 +7,76 @@ flatten a request into that shape and build a spec-shaped response back.
 
 import base64
 import json
+import re
+
+# Client tools surface to the CLI's model as MCP tools under this server name
+# (see tool_bridge.py); responses strip the prefix so clients see their own
+# tool names.
+MCP_PREFIX = "mcp__misanthropic__"
+
+_TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+class ToolRequestError(ValueError):
+    """A client `tools`/`tool_choice` shape the proxy must 400 on."""
+
+
+def extract_client_tools(body):
+    """Pull client-defined tools out of a request.
+
+    Returns (tools, tool_choice) where `tools` is a list of
+    {name, description, input_schema} dicts — empty when the request carries
+    none. `web_search*` server tools are excluded (they ride the web path).
+    Raises ToolRequestError for shapes the hosted API would reject.
+    """
+    raw = body.get("tools")
+    if not isinstance(raw, list):
+        return [], body.get("tool_choice")
+    tools, seen = [], set()
+    for t in raw:
+        if not isinstance(t, dict):
+            continue
+        ttype = str(t.get("type") or "custom")
+        if ttype.startswith("web_search"):
+            continue  # handled by the web path
+        if ttype != "custom" and not t.get("input_schema"):
+            # Other server tools (computer use, code execution, ...) aren't
+            # backed by anything here — reject loudly rather than pretend.
+            raise ToolRequestError(f"Server tool type `{ttype}` is not supported.")
+        name = t.get("name")
+        if not isinstance(name, str) or not _TOOL_NAME_RE.match(name):
+            raise ToolRequestError(
+                "Tool names must match ^[a-zA-Z0-9_-]{1,64}$.")
+        if name in seen:
+            raise ToolRequestError(f"Duplicate tool name: {name}")
+        seen.add(name)
+        tools.append({
+            "name": name,
+            "description": t.get("description") or "",
+            "input_schema": t.get("input_schema") or {"type": "object"},
+        })
+    return tools, body.get("tool_choice")
+
+
+def tool_choice_nudge(tool_choice):
+    """A system-prompt suffix approximating `tool_choice` (best-effort — the
+    CLI has no forced-tool mode, so `any`/`tool` are nudges, not guarantees)."""
+    if not isinstance(tool_choice, dict):
+        return None
+    ctype = tool_choice.get("type")
+    if ctype == "any":
+        return ("You must respond by calling one of the provided tools; "
+                "do not answer in plain text.")
+    if ctype == "tool" and tool_choice.get("name"):
+        return (f"You must respond by calling the `{tool_choice['name']}` tool; "
+                "do not answer in plain text.")
+    return None
+
+
+def strip_mcp_prefix(name):
+    if isinstance(name, str) and name.startswith(MCP_PREFIX):
+        return name[len(MCP_PREFIX):]
+    return name
 
 
 def extract_system(body):
@@ -41,10 +111,14 @@ def _content_to_text(content):
         if btype == "text":
             parts.append(block.get("text", ""))
         elif btype == "tool_result":
+            # Carry the id so a flattened transcript (the dead-park fallback)
+            # keeps calls and results pairable.
             inner = block.get("content")
-            parts.append(_content_to_text(inner) if inner is not None else "")
+            body = _content_to_text(inner) if inner is not None else ""
+            parts.append(f"[tool_result for {block.get('tool_use_id', '')}: {body}]")
         elif btype == "tool_use":
-            parts.append(f"[tool_use {block.get('name', '')}: {json.dumps(block.get('input', {}))}]")
+            parts.append(f"[tool_use {block.get('id', '')} {block.get('name', '')}: "
+                         f"{json.dumps(block.get('input', {}))}]")
         # `image` blocks are intentionally not flattened to text here. When a
         # request carries images, build_cli_input() routes the whole thing
         # through the CLI's stream-json input (which accepts image content) and
@@ -116,18 +190,54 @@ def _message_id(wrapper):
     return "msg_" + (session[:24] or "local")
 
 
-def wrapper_to_message(wrapper, model_requested):
-    """Build an Anthropic Messages response from the CLI's JSON wrapper."""
+def thinking_requested(body):
+    """True when the request opts into extended thinking. The CLI offers no
+    thinking control (no flag, no budget), so this only gates whether thinking
+    blocks are *surfaced*; `budget_tokens` is accepted and unenforced."""
+    t = body.get("thinking")
+    return isinstance(t, dict) and t.get("type") == "enabled"
+
+
+def _blocks_to_content(blocks, fallback_text):
+    """Shape CLI content blocks (thinking/text) into API response content."""
+    content = []
+    for b in blocks or []:
+        t = b.get("type")
+        if t == "text":
+            if b.get("text"):
+                content.append({"type": "text", "text": b["text"]})
+        elif t == "thinking":
+            content.append({"type": "thinking",
+                            "thinking": b.get("thinking", ""),
+                            "signature": b.get("signature", "")})
+        elif t == "redacted_thinking":
+            content.append({"type": "redacted_thinking", "data": b.get("data", "")})
+    if not any(c["type"] == "text" for c in content):
+        content.append({"type": "text", "text": fallback_text})
+    return content
+
+
+def wrapper_to_message(wrapper, model_requested, blocks=None):
+    """Build an Anthropic Messages response from the CLI's JSON wrapper.
+
+    `blocks` (from a thinking-enabled stream-collection run) carries the
+    ordered thinking/text content; without it the response is the single text
+    block built from the wrapper's result string.
+    """
     text = wrapper.get("result")
     if not isinstance(text, str):
         text = ""
     usage = wrapper.get("usage") or {}
+    if blocks is not None:
+        content = _blocks_to_content(blocks, text)
+    else:
+        content = [{"type": "text", "text": text}]
     return {
         "id": _message_id(wrapper),
         "type": "message",
         "role": "assistant",
         "model": model_requested,
-        "content": [{"type": "text", "text": text}],
+        "content": content,
         "stop_reason": wrapper.get("stop_reason") or "end_turn",
         "stop_sequence": None,
         "usage": {
@@ -137,6 +247,48 @@ def wrapper_to_message(wrapper, model_requested):
             "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
         },
     }
+
+
+class ThinkingFilter:
+    """Strip thinking content blocks from a raw event stream — unless the
+    request opted in.
+
+    The CLI thinks by default and the proxy forwards events verbatim, so
+    without this filter clients that never sent `thinking` would receive
+    thinking blocks the hosted API only emits on request. Dropping a block
+    means swallowing its start/delta/stop events AND re-indexing every later
+    block so the client sees a contiguous sequence.
+    """
+
+    _THINKING_TYPES = ("thinking", "redacted_thinking")
+
+    def __init__(self, enabled):
+        self._enabled = enabled
+        self._dropped = []   # source indices of dropped blocks, ascending
+
+    def _remap(self, event):
+        idx = event.get("index")
+        if not isinstance(idx, int) or not self._dropped:
+            return event
+        shift = sum(1 for d in self._dropped if d < idx)
+        return dict(event, index=idx - shift) if shift else event
+
+    def feed(self, event):
+        """Return the event to forward (possibly re-indexed), or None to drop."""
+        if self._enabled:
+            return event
+        et = event.get("type")
+        if et == "content_block_start":
+            btype = (event.get("content_block") or {}).get("type")
+            if btype in self._THINKING_TYPES:
+                self._dropped.append(event.get("index"))
+                return None
+            return self._remap(event)
+        if et in ("content_block_delta", "content_block_stop"):
+            if event.get("index") in self._dropped:
+                return None
+            return self._remap(event)
+        return event
 
 
 def count_tokens(body):
@@ -336,6 +488,137 @@ def web_sse_events(content, usage, stop_reason, model_requested, message_id):
                                                      "partial_json": json.dumps(block.get("input") or {})}})
         elif bt == "web_search_tool_result":
             yield ("content_block_start", {"type": "content_block_start", "index": i, "content_block": block})
+        yield ("content_block_stop", {"type": "content_block_stop", "index": i})
+    yield ("message_delta", {
+        "type": "message_delta",
+        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+        "usage": {"output_tokens": usage.get("output_tokens", 0)},
+    })
+    yield ("message_stop", {"type": "message_stop"})
+
+
+# ---- client tool use: MCP-shim runs -> API tool_use shape --------------------
+
+def extract_tool_results(body):
+    """The `tool_result` blocks of the last user message, if that message is
+    made of nothing else (the shape the SDK produces when continuing a tool
+    loop). Returns a list of {tool_use_id, content, is_error} or None when the
+    last message isn't a pure tool-result turn."""
+    msgs = [m for m in body.get("messages", []) or [] if isinstance(m, dict)]
+    if not msgs or msgs[-1].get("role") != "user":
+        return None
+    content = msgs[-1].get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    results = []
+    for b in content:
+        if not (isinstance(b, dict) and b.get("type") == "tool_result"):
+            return None
+        results.append({
+            "tool_use_id": b.get("tool_use_id"),
+            "content": b.get("content"),
+            "is_error": bool(b.get("is_error")),
+        })
+    return results
+
+
+def rewrite_tool_event(event, model_requested):
+    """In-flight rewrite of a raw stream event from a tool-enabled run:
+    strip the MCP prefix from tool_use block names and pin the requested model
+    id in message_start (the CLI reports the tier it actually ran)."""
+    et = event.get("type")
+    if et == "message_start":
+        message = dict(event.get("message") or {}, model=model_requested)
+        return dict(event, message=message)
+    if et == "content_block_start":
+        cb = event.get("content_block") or {}
+        if cb.get("type") == "tool_use":
+            return dict(event, content_block=dict(cb, name=strip_mcp_prefix(cb.get("name"))))
+    return event
+
+
+def tool_blocks_to_content(blocks):
+    """Shape a tool turn's CLI blocks (thinking/text/tool_use) into API content."""
+    content = []
+    for b in blocks:
+        bt = b.get("type")
+        if bt == "text":
+            if b.get("text"):
+                content.append({"type": "text", "text": b["text"]})
+        elif bt == "thinking":
+            content.append({"type": "thinking", "thinking": b.get("thinking", ""),
+                            "signature": b.get("signature", "")})
+        elif bt == "redacted_thinking":
+            content.append({"type": "redacted_thinking", "data": b.get("data", "")})
+        elif bt == "tool_use":
+            content.append({"type": "tool_use", "id": b.get("id"),
+                            "name": strip_mcp_prefix(b.get("name")),
+                            "input": b.get("input") or {}})
+    return content
+
+
+def tool_use_message(content, usage, model_requested, message_id):
+    """Non-streaming response for a turn that ended in tool calls."""
+    return {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "model": model_requested,
+        "content": content,
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+            "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+        },
+    }
+
+
+def tool_sse_events(content, usage, stop_reason, model_requested, message_id):
+    """Replay a buffered tool turn as a single well-formed SSE message —
+    the non-streaming collection path's streaming twin (mirrors
+    web_sse_events; token-by-token timing is lost, shape is exact)."""
+    start_usage = dict(usage)
+    start_usage["output_tokens"] = 0
+    yield ("message_start", {
+        "type": "message_start",
+        "message": {"id": message_id, "type": "message", "role": "assistant",
+                    "model": model_requested, "content": [],
+                    "stop_reason": None, "stop_sequence": None,
+                    "usage": start_usage},
+    })
+    for i, block in enumerate(content):
+        bt = block.get("type")
+        if bt == "text":
+            yield ("content_block_start", {"type": "content_block_start", "index": i,
+                                           "content_block": {"type": "text", "text": ""}})
+            yield ("content_block_delta", {"type": "content_block_delta", "index": i,
+                                           "delta": {"type": "text_delta",
+                                                     "text": block.get("text", "")}})
+        elif bt == "tool_use":
+            yield ("content_block_start", {"type": "content_block_start", "index": i,
+                                           "content_block": {"type": "tool_use",
+                                                             "id": block.get("id"),
+                                                             "name": block.get("name"),
+                                                             "input": {}}})
+            yield ("content_block_delta", {"type": "content_block_delta", "index": i,
+                                           "delta": {"type": "input_json_delta",
+                                                     "partial_json": json.dumps(block.get("input") or {})}})
+        elif bt == "thinking":
+            yield ("content_block_start", {"type": "content_block_start", "index": i,
+                                           "content_block": {"type": "thinking", "thinking": ""}})
+            yield ("content_block_delta", {"type": "content_block_delta", "index": i,
+                                           "delta": {"type": "thinking_delta",
+                                                     "thinking": block.get("thinking", "")}})
+            if block.get("signature"):
+                yield ("content_block_delta", {"type": "content_block_delta", "index": i,
+                                               "delta": {"type": "signature_delta",
+                                                         "signature": block["signature"]}})
+        elif bt == "redacted_thinking":
+            yield ("content_block_start", {"type": "content_block_start", "index": i,
+                                           "content_block": block})
         yield ("content_block_stop", {"type": "content_block_stop", "index": i})
     yield ("message_delta", {
         "type": "message_delta",

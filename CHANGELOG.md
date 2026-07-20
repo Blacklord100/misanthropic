@@ -7,6 +7,37 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.2.0 — 2026-07-18
+The API-fidelity release: the four biggest gaps between Misanthropic and the
+hosted Messages API are closed.
+
+- **Tool use / function calling.** Send a `tools` array and the model answers
+  with real `tool_use` blocks (`stop_reason: "tool_use"`, authentic ids,
+  schema-conformant input — parallel calls included); send back `tool_result`
+  blocks and the conversation continues. Under the hood each tool run exposes
+  your tools to the local CLI over an in-process MCP bridge and **parks** the
+  live `claude` process while your client executes the tool — the follow-up
+  request resumes the exact same model state (parked runs don't count against
+  the concurrency cap; TTL 10 min, then the next request transparently falls
+  back to a fresh run over the flattened history). Agent frameworks and
+  LangChain-style SDK code now just work. Honest gaps: `tool_choice`
+  `any`/`tool` are best-effort system-prompt nudges, and tools run stateless
+  (key-linked sessions are bypassed for tool requests).
+- **Extended thinking.** `thinking: {"type": "enabled"}` surfaces the model's
+  `thinking` blocks (streaming and not). Also fixes a fidelity leak: thinking
+  blocks no longer reach clients that never asked (`budget_tokens` accepted,
+  not enforced — the CLI exposes no thinking control).
+- **`GET /v1/models`** (and `/v1/models/{id}`): the model catalog endpoint SDK
+  tooling probes on startup. `client.models.list()` now works.
+- **`stop_sequences` are enforced** whenever a request supplies them —
+  streaming stops mid-token-stream with the proper `stop_reason`/
+  `stop_sequence` and the CLI process is reaped immediately. **`max_tokens`
+  enforcement is opt-in** (Settings → "Enforce max_tokens", or
+  `MISANTHROPIC_ENFORCE_MAX_TOKENS=1`): the count is a ~4 chars/token
+  estimate, not the real tokenizer, so truncation stays off by default.
+- Abandoned streams (client hang-up, limit hit) now kill the underlying
+  `claude` process instead of letting it generate into a dead pipe.
+
 ## v1.1.4 — 2026-07-17
 - **Day mode.** New Appearance picker in Settings — System / Light / Dark.
   "System" follows your Mac's setting live; the choice is remembered per

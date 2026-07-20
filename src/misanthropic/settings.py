@@ -10,6 +10,8 @@ Known keys:
   onboarded         wizard completed (suppresses first-run)
   retention_days    history retention; 0/absent = keep forever
   max_concurrency   parallel `claude` process cap (default 8)
+  enforce_max_tokens  truncate responses at the request's max_tokens (default off;
+                      the count is approximate — see limits.py)
 """
 
 import json
@@ -22,7 +24,7 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 _lock = threading.Lock()
 
 _ALLOWED = {"default_model", "web_policy", "onboarded", "retention_days",
-            "max_concurrency"}
+            "max_concurrency", "enforce_max_tokens"}
 
 
 def _settings_path():

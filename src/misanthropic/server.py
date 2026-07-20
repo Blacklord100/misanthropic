@@ -31,8 +31,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import (__version__, dashboard, doctor, history, request_log, savings,
-               sessions, settings, translate)
+from . import (__version__, dashboard, doctor, history, limits, models,
+               request_log, savings, sessions, settings, tool_bridge, translate)
 from . import claude as claude_mod
 from .claude import ClaudeError, resolve_web, run_blocking, run_web, stream_events, web_policy
 
@@ -151,6 +151,21 @@ def _is_invalid_session_error(message):
     return "resume" in m or "session id" in m or "no conversation found" in m
 
 
+class _Slot:
+    """A governor slot with idempotent release, so the tools path can hand its
+    slot back early (a parked process is idle — it must not count against the
+    concurrency cap) while every other path keeps the plain try/finally."""
+
+    def __init__(self, governor):
+        self._governor = governor
+        self._held = True
+
+    def release(self):
+        if self._held:
+            self._held = False
+            self._governor.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"misanthropic/{__version__}"
     protocol_version = "HTTP/1.1"
@@ -187,7 +202,9 @@ class Handler(BaseHTTPRequestHandler):
         meta = (sessions.keys_detail() or {}).get(key) or {}
         return meta.get("label") or "(unnamed)"
 
-    def _request_mode(self, linked, web):
+    def _request_mode(self, linked, web, tools=False):
+        if tools:
+            return "tools"
         if linked and web:
             return "session+web"
         if linked:
@@ -215,12 +232,12 @@ class Handler(BaseHTTPRequestHandler):
             return "\n".join(p for p in parts if p)[:MAX_LOG_TEXT]
         return ""
 
-    def _log_start(self, body, key, linked, web):
+    def _log_start(self, body, key, linked, web, tools=False):
         self._log_rec = {
             "ts": time.time(),
             "key_label": self._key_label(key) if linked else "stateless",
             "model": body.get("model") or claude_mod.DEFAULT_MODEL,
-            "mode": self._request_mode(linked, web),
+            "mode": self._request_mode(linked, web, tools),
             "stream": bool(body.get("stream")),
             "prompt_text": self._last_user_text(body),
         }
@@ -353,6 +370,17 @@ class Handler(BaseHTTPRequestHandler):
                 "mode": "session" if sessions.session_mode_enabled() else "stateless",
                 "claude": snap["status"],
             })
+        if path == "/v1/models":
+            q = self._query()
+            return self._send_json(200, models.list_models(
+                limit=q.get("limit", 20),
+                before_id=q.get("before_id"), after_id=q.get("after_id")))
+        if path.startswith("/v1/models/"):
+            m = models.get_model(path[len("/v1/models/"):])
+            if m is None:
+                return self._send_error(404, "not_found_error",
+                                        f"model: {path[len('/v1/models/'):]}")
+            return self._send_json(200, m)
         if path.startswith("/admin/"):
             if not self._is_local():
                 return self._send_error(403, "permission_error", "Admin API is local-only.")
@@ -538,16 +566,47 @@ class Handler(BaseHTTPRequestHandler):
         # the request (faithful to the hosted API); "on"/"off" force/deny it.
         use_web = resolve_web(_request_wants_web(body))
 
+        # Client-side limits: stop_sequences always honored when supplied;
+        # max_tokens only under the opt-in setting. Web runs are excluded — their
+        # multi-block content already carries documented honest gaps.
+        stop_seqs = body.get("stop_sequences")
+        max_toks = body.get("max_tokens")
+
+        # Extended thinking: surfaced only when the request opts in (the CLI
+        # thinks regardless; we control whether the blocks reach the client).
+        thinking_on = translate.thinking_requested(body)
+
+        # Client-defined tools (function calling). When present they own the
+        # request: web is ignored and the run is stateless even under an
+        # approved key (a session client sends only the new turn, which the
+        # tool loop's flatten-fallback can't work with).
+        try:
+            client_tools, tool_choice = translate.extract_client_tools(body)
+        except translate.ToolRequestError as e:
+            return self._send_error(400, "invalid_request_error", str(e))
+
         # Start a request-log entry; finalized in _send_json or the streaming
         # paths' end-of-emit hooks. Visible at GET /admin/requests.
-        self._log_start(body, key, linked, use_web)
+        self._log_start(body, key, linked, use_web, tools=bool(client_tools))
 
         # Take a CLI slot (or refuse with the API's own overload signal, which
-        # SDKs retry with backoff). Held for the full run, streaming included.
+        # SDKs retry with backoff). Held for the full run, streaming included —
+        # except tool runs, which hand the slot back while parked.
         if not _governor.acquire(timeout=QUEUE_WAIT_S):
             return self._send_error(529, "overloaded_error",
                                     "Local server is at capacity; retry shortly.")
+        slot = _Slot(_governor)
         try:
+            if client_tools:
+                if use_web:
+                    sys.stderr.write("  tools+web in one request: client tools "
+                                     "take precedence, web ignored\n")
+                if linked:
+                    sys.stderr.write("  tools under an approved key run "
+                                     "stateless (sessions+tools unsupported)\n")
+                return self._handle_tools(body, client_tools, tool_choice,
+                                          stop_seqs, max_toks, thinking_on, slot)
+
             # Web mode runs the agentic loop and reshapes its tool blocks into
             # the API's `web_search` content. Stream and non-stream both use it.
             if use_web:
@@ -556,22 +615,250 @@ class Handler(BaseHTTPRequestHandler):
                 return self._blocking_web(prompt, model, system, key if linked else None, input_format)
 
             if body.get("stream"):
-                return self._stream_messages(prompt, model, system, key if linked else None, input_format)
+                return self._stream_messages(prompt, model, system, key if linked else None, input_format,
+                                             stop_seqs=stop_seqs, max_toks=max_toks,
+                                             thinking=thinking_on)
 
             if linked:
-                return self._blocking_session(prompt, model, system, key, input_format)
+                return self._blocking_session(prompt, model, system, key, input_format,
+                                              stop_seqs=stop_seqs, max_toks=max_toks,
+                                              thinking=thinking_on)
 
             try:
-                wrapper = run_blocking(prompt, model=model, system=system, input_format=input_format)
+                blocks = None
+                if thinking_on:
+                    wrapper, blocks = run_blocking(prompt, model=model, system=system,
+                                                   input_format=input_format, collect_blocks=True)
+                else:
+                    wrapper = run_blocking(prompt, model=model, system=system, input_format=input_format)
             except ClaudeError as e:
                 return self._send_claude_error(e)
-            self._send_json(200, translate.wrapper_to_message(wrapper, model))
+            msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
+            self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
         finally:
-            _governor.release()
+            slot.release()
 
     def _send_claude_error(self, e):
         status, etype = classify_claude_error(str(e))
         return self._send_error(status, etype, str(e))
+
+    # ---- client tool use (function calling) --------------------------------
+
+    def _handle_tools(self, body, tools, tool_choice, stop_seqs, max_toks,
+                      thinking, slot):
+        """Route a tools request: continue a parked run when the last message
+        is its matching tool_result set, else start a fresh shim run (which is
+        also the recovery path for an expired/dead park — the client resends
+        full history, so we flatten it and carry on)."""
+        model = body.get("model") or claude_mod.DEFAULT_MODEL
+        system_raw = translate.extract_system(body)
+        # Continuations must match on what the CLIENT sent, so fingerprint the
+        # raw system; the tool_choice nudge only decorates the spawned run.
+        fp = tool_bridge.fingerprint(model, system_raw)
+        system = system_raw
+        nudge = translate.tool_choice_nudge(tool_choice)
+        if nudge:
+            system = f"{system_raw or claude_mod.DEFAULT_SYSTEM}\n\n{nudge}"
+        stream = bool(body.get("stream"))
+
+        results = translate.extract_tool_results(body)
+        if results is not None:
+            run, partial = tool_bridge.find_park(
+                [r["tool_use_id"] for r in results])
+            if run is not None and run.fingerprint == fp and run.claim_for_resume():
+                try:
+                    run.deliver_results(results)
+                except ClaudeError as e:
+                    run.destroy()
+                    return self._send_claude_error(e)
+                return self._drive_tool_turn(run, model, stream, thinking,
+                                             stop_seqs, max_toks, slot)
+            if partial:
+                return self._send_error(
+                    400, "invalid_request_error",
+                    "`tool_result` blocks must cover exactly the pending tool "
+                    "calls of the previous `tool_use` turn.")
+            # No live park (expired, evicted, restarted): fall through to a
+            # fresh run — build_cli_input flattens the full history, including
+            # tool calls/results, into the prompt.
+
+        input_format, prompt = translate.build_cli_input(body.get("messages") or [])
+        try:
+            run = tool_bridge.start_run(tools, model, system, prompt,
+                                        input_format=input_format, fp=fp)
+        except ClaudeError as e:
+            return self._send_claude_error(e)
+        return self._drive_tool_turn(run, model, stream, thinking,
+                                     stop_seqs, max_toks, slot)
+
+    def _drive_tool_turn(self, run, model, stream, thinking, stop_seqs,
+                         max_toks, slot):
+        if stream:
+            return self._stream_tool_turn(run, model, thinking, stop_seqs,
+                                          max_toks, slot)
+        return self._blocking_tool_turn(run, model, thinking, stop_seqs,
+                                        max_toks, slot)
+
+    def _park_or_destroy(self, run, slot):
+        """A turn ended in tool calls: park the process once every call has
+        reached the shim (else the continuation could never be answered —
+        destroy instead and let the next request fall back to a fresh run).
+        The park hands its governor slot back: an idle process must not count
+        against the concurrency cap."""
+        ids = [b.get("id") for b in run.turn_blocks
+               if b.get("type") == "tool_use" and b.get("id")]
+        if ids and run.wait_for_dispatch(ids):
+            run.park()
+            slot.release()
+            return True
+        run.destroy()
+        return False
+
+    def _blocking_tool_turn(self, run, model, thinking, stop_seqs, max_toks, slot):
+        error = None
+        for kind, obj in run.read_turn():
+            if kind == "error":
+                error = obj.get("message", "")
+        if error is not None:
+            run.destroy()
+            status, etype = classify_claude_error(error)
+            return self._send_error(status, etype, error)
+
+        if run.turn_stop_reason == "tool_use":
+            blocks = run.turn_blocks if thinking else [
+                b for b in run.turn_blocks
+                if b.get("type") not in ("thinking", "redacted_thinking")]
+            content = translate.tool_blocks_to_content(blocks)
+            self._park_or_destroy(run, slot)
+            return self._send_json(200, translate.tool_use_message(
+                content, run.turn_usage, model, run.message_id))
+
+        wrapper = run.finish()
+        run.destroy()
+        if wrapper.get("is_error"):
+            detail = wrapper.get("result")
+            detail = detail if isinstance(detail, str) else (
+                wrapper.get("subtype") or "Local Claude returned an error.")
+            status, etype = classify_claude_error(detail)
+            return self._send_error(status, etype, detail)
+        blocks = run.turn_blocks if thinking else [
+            b for b in run.turn_blocks if b.get("type") == "text"]
+        msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
+        return self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
+
+    def _stream_tool_turn(self, run, model, thinking, stop_seqs, max_toks, slot):
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def sse(event_type, data):
+            chunk = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+            self.wfile.write(chunk.encode())
+            self.wfile.flush()
+
+        gate = limits.LimitGate(stop_seqs, max_toks)
+        tfilter = translate.ThinkingFilter(thinking)
+        text_blocks = set()
+        text_parts = []
+        log_in = log_out = None
+
+        def _end_stream_early(block_index):
+            sse("content_block_stop", {"type": "content_block_stop", "index": block_index})
+            sse("message_delta", {
+                "type": "message_delta",
+                "delta": {"stop_reason": gate.stop_reason,
+                          "stop_sequence": gate.stop_sequence},
+                "usage": {"output_tokens": gate.emitted_tokens()},
+            })
+            sse("message_stop", {"type": "message_stop"})
+
+        try:
+            for kind, event in run.read_turn():
+                if kind == "error":
+                    run.destroy()
+                    sse("error", {"type": "error", "error": {
+                        "type": "api_error", "message": event.get("message", "")}})
+                    self._log_finalize(500, error_msg=event.get("message"))
+                    return
+                event = tfilter.feed(event)
+                if event is None:
+                    continue
+                event = translate.rewrite_tool_event(event, model)
+                et = event.get("type")
+                if et == "message_start":
+                    u = ((event.get("message") or {}).get("usage") or {})
+                    log_in = u.get("input_tokens", log_in)
+                elif et == "message_delta":
+                    ot = (event.get("usage") or {}).get("output_tokens")
+                    if ot is not None:
+                        log_out = ot
+                elif et == "content_block_delta":
+                    delta = event.get("delta") or {}
+                    if delta.get("type") == "text_delta" and delta.get("text"):
+                        if gate.active:
+                            text_blocks.add(event.get("index", 0))
+                            emit, done = gate.feed(delta["text"])
+                            if emit:
+                                text_parts.append(emit)
+                                event = dict(event, delta=dict(delta, text=emit))
+                                sse(et, event)
+                            if done:
+                                # A limit hit mid-tool-run ends the response —
+                                # and the run: there is nothing to park.
+                                _end_stream_early(event.get("index", 0))
+                                run.destroy()
+                                self._log_finalize(200, in_tokens=log_in,
+                                                   out_tokens=gate.emitted_tokens(),
+                                                   response_text="".join(text_parts))
+                                return
+                            continue
+                        text_parts.append(delta["text"])
+                elif (et == "content_block_stop" and gate.active
+                      and event.get("index", 0) in text_blocks):
+                    tail = gate.flush()
+                    if tail:
+                        text_parts.append(tail)
+                        sse("content_block_delta", {
+                            "type": "content_block_delta",
+                            "index": event.get("index", 0),
+                            "delta": {"type": "text_delta", "text": tail},
+                        })
+                    if gate.finished:
+                        _end_stream_early(event.get("index", 0))
+                        run.destroy()
+                        self._log_finalize(200, in_tokens=log_in,
+                                           out_tokens=gate.emitted_tokens(),
+                                           response_text="".join(text_parts))
+                        return
+                sse(et, event)
+
+            if run.turn_stop_reason == "tool_use":
+                self._park_or_destroy(run, slot)
+                self._log_finalize(200, in_tokens=log_in, out_tokens=log_out,
+                                   response_text="".join(text_parts))
+                return
+            wrapper = run.finish()
+            run.destroy()
+            usage = wrapper.get("usage") or {}
+            self._log_finalize(200,
+                               in_tokens=usage.get("input_tokens", log_in),
+                               out_tokens=usage.get("output_tokens", log_out),
+                               cache_write=usage.get("cache_creation_input_tokens", 0),
+                               cache_read=usage.get("cache_read_input_tokens", 0),
+                               response_text="".join(text_parts))
+        except (BrokenPipeError, ConnectionResetError):
+            run.destroy()  # client hung up: a parked-to-be run is worthless now
+        except Exception as e:
+            run.destroy()
+            try:
+                sse("error", {"type": "error", "error": {"type": "api_error",
+                                                         "message": str(e)}})
+            except Exception:
+                pass
+            self._log_finalize(500, error_msg=str(e))
 
     # ---- web search (opt-in) ------------------------------------------------
 
@@ -664,15 +951,22 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             self._log_finalize(500, error_msg=str(e))
 
-    def _blocking_session(self, prompt, model, system, key, input_format="text"):
+    def _blocking_session(self, prompt, model, system, key, input_format="text",
+                          stop_seqs=None, max_toks=None, thinking=False):
         """Run linked to the key's session: resume it, persist, serialize."""
         cwd = str(sessions.WORKSPACE)
+        blocks = None
+
+        def _run(resume):
+            out = run_blocking(prompt, model=model, system=system,
+                               resume=resume, persist=True, cwd=cwd,
+                               input_format=input_format, collect_blocks=thinking)
+            return out if thinking else (out, None)
+
         with sessions.key_lock(key):
             resume_id = sessions.get_session_id(key)
             try:
-                wrapper = run_blocking(prompt, model=model, system=system,
-                                       resume=resume_id, persist=True, cwd=cwd,
-                                       input_format=input_format)
+                wrapper, blocks = _run(resume_id)
             except ClaudeError as e:
                 # Only start over if the session id is genuinely bad — a transient
                 # error (rate limit, backend hiccup) must NOT destroy the link.
@@ -680,17 +974,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_claude_error(e)
                 sessions.forget_session(key)
                 try:
-                    wrapper = run_blocking(prompt, model=model, system=system,
-                                           resume=None, persist=True, cwd=cwd,
-                                           input_format=input_format)
+                    wrapper, blocks = _run(None)
                 except ClaudeError as e2:
                     return self._send_claude_error(e2)
             sid = wrapper.get("session_id")
             if sid:
                 sessions.record_session(key, sid)
-        self._send_json(200, translate.wrapper_to_message(wrapper, model))
+        msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
+        self._send_json(200, limits.apply_to_message(msg, stop_seqs, max_toks))
 
-    def _stream_messages(self, prompt, model, system, key, input_format="text"):
+    def _stream_messages(self, prompt, model, system, key, input_format="text",
+                         stop_seqs=None, max_toks=None, thinking=False):
         # SSE has no Content-Length and we don't chunk-encode, so the client
         # detects end-of-stream by EOF. Close the connection when done.
         self.close_connection = True
@@ -704,6 +998,26 @@ class Handler(BaseHTTPRequestHandler):
             chunk = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
             self.wfile.write(chunk.encode())
             self.wfile.flush()
+
+        # Limit gate: scans text deltas for stop_sequences / the token budget.
+        # When it trips we synthesize the API's own ending (trimmed delta,
+        # content_block_stop, message_delta with the real stop_reason,
+        # message_stop) and abandon the CLI stream — closing the generator
+        # kills the subprocess (see stream_events).
+        gate = limits.LimitGate(stop_seqs, max_toks)
+        # Thinking blocks are stripped (with re-indexing) unless requested.
+        tfilter = translate.ThinkingFilter(thinking)
+        text_blocks = set()  # indices (post-filter) that streamed text deltas
+
+        def _end_stream_early(block_index):
+            sse("content_block_stop", {"type": "content_block_stop", "index": block_index})
+            sse("message_delta", {
+                "type": "message_delta",
+                "delta": {"stop_reason": gate.stop_reason,
+                          "stop_sequence": gate.stop_sequence},
+                "usage": {"output_tokens": gate.emitted_tokens()},
+            })
+            sse("message_stop", {"type": "message_stop"})
 
         # key is None in stateless mode; only acquire the lock when session-linked.
         lock = sessions.key_lock(key) if key else None
@@ -722,6 +1036,9 @@ class Handler(BaseHTTPRequestHandler):
                 if kind == "session":
                     captured_sid = obj
                 elif kind == "event":
+                    obj = tfilter.feed(obj)
+                    if obj is None:
+                        continue
                     et = obj.get("type")
                     if et == "message_start":
                         u = ((obj.get("message") or {}).get("usage") or {})
@@ -733,7 +1050,36 @@ class Handler(BaseHTTPRequestHandler):
                     elif et == "content_block_delta":
                         delta = obj.get("delta") or {}
                         if delta.get("type") == "text_delta" and delta.get("text"):
+                            if gate.active:
+                                text_blocks.add(obj.get("index", 0))
+                                emit, done = gate.feed(delta["text"])
+                                if emit:
+                                    text_parts.append(emit)
+                                    obj = dict(obj, delta=dict(delta, text=emit))
+                                    sse(et, obj)
+                                if done:
+                                    log_out = gate.emitted_tokens()
+                                    _end_stream_early(obj.get("index", 0))
+                                    break
+                                continue
                             text_parts.append(delta["text"])
+                    elif (et == "content_block_stop" and gate.active
+                          and obj.get("index", 0) in text_blocks):
+                        # Release the scanner's withheld tail inside the block
+                        # it belongs to, before forwarding the block close.
+                        tail = gate.flush()
+                        if tail:
+                            text_parts.append(tail)
+                            sse("content_block_delta", {
+                                "type": "content_block_delta",
+                                "index": obj.get("index", 0),
+                                "delta": {"type": "text_delta", "text": tail},
+                            })
+                        if gate.finished:
+                            # The budget ran out exactly on the withheld tail.
+                            log_out = gate.emitted_tokens()
+                            _end_stream_early(obj.get("index", 0))
+                            break
                     sse(et or "message_delta", obj)
                 elif kind == "error":
                     saw_error = True

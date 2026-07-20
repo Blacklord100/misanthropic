@@ -50,7 +50,11 @@ export ANTHROPIC_API_KEY=not-needed
 - The macOS **`.app`** (menu-bar GUI) is a *separate* install from the `misanthropic`
   CLI — installing one does not provide the other. For the command line, use pipx/pip above.
 - Models: `sonnet` / `opus` / `haiku` or any full Claude id (e.g. `claude-sonnet-4-6`).
+  `GET /v1/models` lists the catalog.
 - Web search is per-request: include `tools:[{"type":"web_search_20260209","name":"web_search"}]`.
+- Client tool use (function calling) works like the hosted API: send a `tools`
+  array, get `tool_use` blocks back, continue with `tool_result` blocks.
+  Extended thinking via `thinking:{"type":"enabled"}`.
 - Do **not** bind to `0.0.0.0` / expose it publicly — it routes the user's own subscription.
   Personal use only.
 

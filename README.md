@@ -10,7 +10,7 @@ no API key, no per-token bill, no call to anyone's server but your own.
 
 **[⬇ Download for macOS](https://github.com/Blacklord100/misanthropic/releases/latest)** · [Install](#install) · [Quick start](#quick-start) · [Tips & tricks](#tips--tricks) · [☕ Buy me a coffee](https://paypal.me/Blacklord100)
 
-*For personal use only — don't stand it up as a shared server. v1.0.1 · [CHANGELOG](CHANGELOG.md) · formerly Breakthrough.*
+*For personal use only — don't stand it up as a shared server. v1.2.0 · [CHANGELOG](CHANGELOG.md) · formerly Breakthrough.*
 
 </div>
 
@@ -227,14 +227,19 @@ with `MISANTHROPIC_APPCAST_URL`.
 | `MISANTHROPIC_WEB` | `auto` | Web policy: `auto` / `on` (`1`) / `off`. |
 | `MISANTHROPIC_WEB_MAX_TURNS` | `16` | Agentic turn cap when web is on. |
 | `MISANTHROPIC_WEB_TIMEOUT_MS` | `600000` | Watchdog for a web run (it can exceed 120s). |
+| `MISANTHROPIC_ENFORCE_MAX_TOKENS` | off | Truncate responses at `max_tokens` (approximate count). |
+| `MISANTHROPIC_TOOL_PARK_TTL_MS` | `600000` | How long a parked tool-loop process waits for its `tool_result`. |
+| `MISANTHROPIC_MAX_PARKED` | `8` | Cap on simultaneously parked tool runs (oldest evicted). |
+| `MISANTHROPIC_TOOL_MAX_TURNS` | `50` | Runaway guard on a single tool run's agentic turns. |
 | `MISANTHROPIC_APPCAST_URL` | public feed | Override the update-check manifest. |
 
 ### 📡 Endpoints
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/v1/messages` | Messages API. Streaming + non-streaming. |
+| `POST` | `/v1/messages` | Messages API. Streaming + non-streaming, tools, thinking. |
 | `POST` | `/v1/messages/count_tokens` | Approximate token count (~4 chars/token). |
+| `GET`  | `/v1/models` · `/v1/models/{id}` | Model catalog (what SDK pickers probe). |
 | `GET`  | `/health` | Liveness check. |
 | `GET`  | `/` | Web dashboard. |
 | `GET`  | `/admin/state` · `/admin/requests` | Dashboard state / activity log. **Localhost-only.** |
@@ -265,16 +270,53 @@ stream-json` (the only CLI path that accepts image content). **Web** runs adds
 `--tools WebSearch --allowedTools WebSearch --max-turns 16` and remaps the CLI's
 `WebSearch` blocks into the API's `web_search` content shape.
 
+### 🔧 Tool use (function calling)
+
+Send a `tools` array like you would to the hosted API and the model answers with
+real `tool_use` blocks — parallel calls, authentic ids, `stop_reason:
+"tool_use"` — then continue the loop with `tool_result` blocks. Agent
+frameworks just work:
+
+```python
+tools = [{"name": "get_weather", "description": "Weather for a city.",
+          "input_schema": {"type": "object",
+                           "properties": {"city": {"type": "string"}},
+                           "required": ["city"]}}]
+first = client.messages.create(model="claude-sonnet-4-6", max_tokens=1024,
+                               tools=tools, messages=[...])
+# first.stop_reason == "tool_use" -> run the tool, send back tool_result
+```
+
+Under the hood the proxy exposes your tools to the local CLI over an
+in-process MCP bridge and **parks** the live `claude` process while your code
+executes the tool; the follow-up request continues the exact same model state.
+Parks expire after 10 min (`MISANTHROPIC_TOOL_PARK_TTL_MS`) — an expired loop
+transparently restarts from the resent history. Honest gaps: `tool_choice`
+`any` / `tool` are best-effort nudges (the CLI has no forced-tool mode), and
+tool requests always run stateless — key-linked sessions are bypassed.
+
+### 🧩 Extended thinking
+
+Pass `thinking={"type": "enabled", "budget_tokens": N}` and responses carry the
+model's `thinking` blocks, streaming included. Without it, thinking is
+stripped — exactly like the hosted API. (`budget_tokens` is accepted but not
+enforced; the CLI exposes no thinking knobs.)
+
 ## Limitations
 
 A faithful proxy for text generation, not a 1:1 reimplementation:
 
-- **`max_tokens`, `temperature`, `top_p`, `stop_sequences`** are accepted but not
-  enforced — the CLI doesn't expose those knobs in print mode.
-- **`tools` (function calling)** isn't supported. (Web search *is*.)
+- **`stop_sequences` are enforced** by the proxy (the CLI can't) — including
+  mid-stream, with the proper `stop_reason`. **`max_tokens` enforcement is
+  opt-in** (Settings, or `MISANTHROPIC_ENFORCE_MAX_TOKENS=1`) because the
+  count is a ~4 chars/token estimate, not the real tokenizer.
+- **`temperature`, `top_p`, `top_k`** are accepted but not enforced — the CLI
+  doesn't expose sampling knobs in print mode.
+- **`tool_choice: {"type": "any"|"tool"}`** is a best-effort system-prompt
+  nudge, not a guarantee; `thinking.budget_tokens` is not enforced.
 - **`count_tokens`** is an estimate, not the exact server-side tokenizer.
 - Multi-turn history is flattened into one prompt (works well; for true continuity use
-  key-linked sessions).
+  key-linked sessions). Tool requests run stateless even under an approved key.
 
 ## Security
 

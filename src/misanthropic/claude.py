@@ -43,6 +43,23 @@ def _positive_int_env(name, default):
 
 
 WEB_MAX_TURNS = str(_positive_int_env("MISANTHROPIC_WEB_MAX_TURNS", 16))
+
+# Client tool runs: the loop is client-driven (each tool round is a turn), so
+# the cap is a runaway guard, not a policy.
+TOOL_MAX_TURNS = str(_positive_int_env("MISANTHROPIC_TOOL_MAX_TURNS", 50))
+
+# Environment for tool-enabled runs (spike-verified against CLI 2.1.177):
+#   ENABLE_TOOL_SEARCH=0  surfaces MCP tools directly to the model instead of
+#                         deferring them behind a ToolSearch lookup turn.
+#   MCP_TOOL_TIMEOUT      (ms) how long the CLI waits on a tools/call — parked
+#                         runs block a call while the HTTP client executes the
+#                         tool, so give it a day.
+#   MCP_TIMEOUT           (ms) MCP server startup window.
+TOOL_RUN_ENV = {
+    "ENABLE_TOOL_SEARCH": "0",
+    "MCP_TOOL_TIMEOUT": "86400000",
+    "MCP_TIMEOUT": "30000",
+}
 # The agentic web loop legitimately takes longer than GEN_TIMEOUT_S (~120s):
 # multiple search turns + the final answer can run ~1-2 min in normal use, so
 # default to 10 min and let it be overridden. The watchdog kills the process if
@@ -240,7 +257,7 @@ class ClaudeError(RuntimeError):
     """A user-facing failure from the local Claude run."""
 
 
-def _spawn_claude(args, prompt, cwd):
+def _spawn_claude(args, prompt, cwd, env_extra=None):
     """Popen claude, drain stderr concurrently, write the prompt to stdin.
 
     `--verbose` is talkative; if we left stderr buffered until after the run, the
@@ -249,6 +266,9 @@ def _spawn_claude(args, prompt, cwd):
     error messages. stdin is written with BrokenPipe tolerance so a claude that
     rejects flags and exits early doesn't take us down — its stdout/stderr will
     still explain why. Returns (proc, stderr_lines)."""
+    env = _child_env()
+    if env_extra:
+        env.update(env_extra)
     try:
         proc = subprocess.Popen(
             args,
@@ -262,7 +282,7 @@ def _spawn_claude(args, prompt, cwd):
             errors="replace",
             bufsize=1,
             cwd=cwd,
-            env=_child_env(),
+            env=env,
         )
     except FileNotFoundError:
         raise ClaudeError(
@@ -338,20 +358,44 @@ def _base_args(model, system, resume=None, persist=False, web=False):
     return args
 
 
+def tool_args(model, system, allowed_tools, mcp_config_json):
+    """Args for a client-tool run. `--tools "ToolSearch"` + ENABLE_TOOL_SEARCH=0
+    (in TOOL_RUN_ENV) is the spike-verified combination that exposes exactly
+    the MCP tools and zero built-ins; `--strict-mcp-config` keeps the user's
+    own MCP servers out of proxy runs."""
+    return [
+        claude_bin(),
+        "-p",
+        "--system-prompt", system if system else DEFAULT_SYSTEM,
+        "--tools", "ToolSearch",
+        "--allowedTools", ",".join(allowed_tools),
+        "--mcp-config", mcp_config_json,
+        "--strict-mcp-config",
+        "--max-turns", TOOL_MAX_TURNS,
+        "--no-session-persistence",
+        "--model", cli_model(model or DEFAULT_MODEL),
+        "--output-format", "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+    ]
+
+
 def _collect_blocking(args, payload, cwd, timeout_s):
     """Drive a stream-json run and collapse it into a run_blocking-style wrapper.
 
     `--output-format json` can't be combined with `--input-format stream-json`
-    (the only CLI path that takes image input), so for image requests we run the
-    stream-json *output* and rebuild the one-shot wrapper from it: the CLI's
-    terminal `result` event already carries `result`/`usage`/`stop_reason`/
-    `session_id` — the same shape `run_blocking` returns. Text blocks are
-    accumulated only as a fallback if that event lacks the joined result string.
+    (the only CLI path that takes image input) and it drops thinking blocks, so
+    for image or thinking requests we run the stream-json *output* and rebuild
+    the one-shot wrapper from it: the CLI's terminal `result` event already
+    carries `result`/`usage`/`stop_reason`/`session_id` — the same shape
+    `run_blocking` returns. Returns (wrapper, blocks) where `blocks` is the
+    ordered list of thinking/text content blocks the model produced; the joined
+    text is also the fallback if the result event lacks the result string.
     """
     proc, stderr_lines = _spawn_claude(args, payload, cwd)
     timer, timed_out = _kill_watchdog(proc, timeout_s)
     wrapper = None
-    text_parts = []
+    blocks = []
     try:
         for line in proc.stdout:
             line = line.strip()
@@ -364,8 +408,9 @@ def _collect_blocking(args, payload, cwd, timeout_s):
             otype = obj.get("type")
             if otype == "assistant":
                 for b in (obj.get("message", {}).get("content") or []):
-                    if isinstance(b, dict) and b.get("type") == "text":
-                        text_parts.append(b.get("text", ""))
+                    if isinstance(b, dict) and b.get("type") in (
+                            "text", "thinking", "redacted_thinking"):
+                        blocks.append(b)
             elif otype == "result":
                 wrapper = obj
         rc = proc.wait()
@@ -384,12 +429,14 @@ def _collect_blocking(args, payload, cwd, timeout_s):
         result = wrapper.get("result")
         raise ClaudeError(result if isinstance(result, str) else "Local Claude returned an error.")
     if not isinstance(wrapper.get("result"), str) or not wrapper.get("result"):
-        wrapper["result"] = "".join(text_parts)
-    return wrapper
+        wrapper["result"] = "".join(b.get("text", "") for b in blocks
+                                    if b.get("type") == "text")
+    return wrapper, blocks
 
 
 def run_blocking(prompt, model=None, system=None, timeout=None,
-                 resume=None, persist=False, cwd=None, input_format="text"):
+                 resume=None, persist=False, cwd=None, input_format="text",
+                 collect_blocks=False):
     """Invoke `claude -p --output-format json` and return the parsed wrapper dict.
 
     The wrapper carries `result` (the text), `stop_reason`, `usage`, and
@@ -399,12 +446,19 @@ def run_blocking(prompt, model=None, system=None, timeout=None,
     `input_format="stream-json"` feeds an Anthropic-shaped JSONL payload (used to
     carry image content); that path drives stream-json output and collects, since
     `--output-format json` is incompatible with `--input-format stream-json`.
+
+    `collect_blocks=True` (extended thinking) also forces the stream-collection
+    path — `--output-format json` drops thinking blocks — and returns
+    (wrapper, blocks) with the ordered thinking/text content blocks.
     """
     base = _base_args(model or DEFAULT_MODEL, system, resume=resume, persist=persist)
     timeout_s = timeout if timeout is not None else GEN_TIMEOUT_S
-    if input_format == "stream-json":
-        args = base + ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
-        return _collect_blocking(args, prompt, cwd, timeout_s)
+    if input_format == "stream-json" or collect_blocks:
+        args = base + ["--output-format", "stream-json", "--verbose"]
+        if input_format == "stream-json":
+            args += ["--input-format", "stream-json"]
+        wrapper, blocks = _collect_blocking(args, prompt, cwd, timeout_s)
+        return (wrapper, blocks) if collect_blocks else wrapper
     args = base + ["--output-format", "json"]
     try:
         proc = subprocess.run(
@@ -491,6 +545,14 @@ def stream_events(prompt, model=None, system=None, resume=None, persist=False, c
         rc = proc.wait()
     finally:
         timer.cancel()
+        # If the consumer abandoned us mid-stream (limit gate tripped, client
+        # hung up), the CLI is still generating into a pipe nobody reads —
+        # kill it instead of letting it burn tokens until the watchdog fires.
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     if timed_out[0]:
         yield ("error", {"message": f"Local Claude timed out after {GEN_TIMEOUT_S:.0f}s."})

@@ -90,6 +90,19 @@ export function Settings() {
           />
         </Row>
         <Row
+          title="Enforce max_tokens"
+          hint="Truncate responses at each request's max_tokens. The count is a ~4 chars/token estimate (the CLI exposes no real limit), so this is off by default. stop_sequences are always honored."
+        >
+          <Segmented
+            value={data.settings?.enforce_max_tokens ? 'on' : 'off'}
+            onChange={(v) => save({ enforce_max_tokens: v === 'on' }, `Enforce max_tokens: ${v}`)}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'on', label: 'On' },
+            ]}
+          />
+        </Row>
+        <Row
           title="Concurrency"
           hint="How many Claude processes may run at once. Extra requests queue briefly, then get the API's 529 so SDKs retry with backoff. Applies immediately."
         >
