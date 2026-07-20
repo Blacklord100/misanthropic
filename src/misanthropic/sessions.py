@@ -108,6 +108,26 @@ def create_key(label=""):
     return key
 
 
+def key_failover(key):
+    """This key's failover override: "on" | "off" | None (inherit the global
+    failover_policy setting). Lets each connected project decide whether its
+    requests may hop accounts on a usage limit."""
+    with _file_lock:
+        return _read_keys().get(key, {}).get("failover")
+
+
+def set_key_failover(key, mode):
+    with _file_lock:
+        store = _read_keys()
+        if key not in store:
+            raise KeyError(key)
+        if mode in ("on", "off"):
+            store[key]["failover"] = mode
+        else:
+            store[key].pop("failover", None)  # "default" = inherit global
+        _write_json(KEYS_FILE, store)
+
+
 def remove_key(key):
     with _file_lock:
         store = _read_keys()

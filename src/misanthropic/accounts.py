@@ -209,9 +209,38 @@ def eligible(caps=None):
     return out
 
 
+def first_choice(caps=None):
+    """The account that WOULD serve by pin/priority, ignoring cooldowns and
+    logged-out marks — what "failover off" pins the request to. None only when
+    no enabled account supports the caps at all."""
+    pin = pinned()
+    candidates = [a for a in list_accounts()
+                  if a.get("enabled", True) and backend_supports(a["backend"], caps)]
+    if pin:
+        for a in candidates:
+            if a["id"] == pin:
+                return a
+    return candidates[0] if candidates else None
+
+
+def failover_enabled(key_override=None):
+    """Whether THIS request may hop accounts on a usage limit. The per-key
+    override ("on"/"off" from keys.json) wins; otherwise the global
+    failover_policy setting decides — default "off": never automatic unless
+    the user picked it."""
+    if key_override in ("on", "off"):
+        return key_override == "on"
+    from . import settings
+    return settings.get("failover_policy") == "auto"
+
+
 def serving(caps=None):
     order = eligible(caps)
-    return order[0] if order else None
+    if order:
+        return order[0]
+    # Everything cooling/logged-out: the UI's "serving" is still the account
+    # requests would try first.
+    return first_choice(caps)
 
 
 def claude_only(caps):

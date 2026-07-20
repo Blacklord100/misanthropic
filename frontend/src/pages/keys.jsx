@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api, useData, fmtUsd, fmtNum } from '../api'
-import { EmptyState, Modal, Skeleton, Field, CopyButton, useToast } from '../components.jsx'
+import { EmptyState, Modal, Skeleton, Field, CopyButton, Segmented, useToast } from '../components.jsx'
 
 export function snippetFor(key, base) {
   return {
@@ -133,6 +133,27 @@ export function Keys({ state }) {
               {expanded === k.key && (
                 <div class="fade-in flex flex-col gap-3 border-t border-line bg-raised/20 px-5 py-4">
                   <ConnectSnippets apiKey={k.key} base={base} />
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="max-w-sm text-[12px] leading-relaxed text-mute">
+                      <span class="font-medium text-ink">Account failover</span> — whether
+                      this project's requests may hop to another account when the serving
+                      one hits its usage limit. "Default" follows the Settings policy;
+                      for a session key, failing over starts a fresh conversation.
+                    </div>
+                    <Segmented
+                      value={k.failover || 'default'}
+                      onChange={async (v) => {
+                        await api.keyFailover(k.key, v)
+                        toast(`Failover for ${k.label || 'key'}: ${v}`)
+                        reload()
+                      }}
+                      options={[
+                        { value: 'default', label: 'Default' },
+                        { value: 'on', label: 'On' },
+                        { value: 'off', label: 'Off' },
+                      ]}
+                    />
+                  </div>
                   <div class="flex justify-end gap-2">
                     <button
                       class="btn"

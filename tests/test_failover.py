@@ -11,10 +11,17 @@ import pytest
 
 anthropic = pytest.importorskip("anthropic")
 
-from misanthropic import accounts, history, sessions
+from misanthropic import accounts, history, sessions, settings
 from misanthropic import claude as claude_mod
 from misanthropic import server
 from tests.test_contract import FAKE_CLAUDE
+
+
+@pytest.fixture(autouse=True)
+def _auto_failover(_isolate_state):
+    """These tests exercise the failover machinery, so opt into it (the
+    shipped default is 'off' — see test_failover_policy.py)."""
+    settings.update({"failover_policy": "auto"})
 
 
 def _acct(aid, label, path, priority):
@@ -163,6 +170,8 @@ def test_session_sticks_to_account_and_529_when_cooling(tmp_path, client):
             _acct("acc-b", "B", str(tmp_path / "healthy-b"), 1),
         ]}))
     sessions.add_key("sk-test-session-key", "t")
+    # This key opts OUT of failover: continuity must win over availability.
+    sessions.set_key_failover("sk-test-session-key", "off")
     kw = dict(model="claude-sonnet-4-6", max_tokens=64,
               messages=[{"role": "user", "content": "ping"}])
     scoped = anthropic.Anthropic(base_url=client.base_url,
@@ -175,6 +184,28 @@ def test_session_sticks_to_account_and_529_when_cooling(tmp_path, client):
         scoped.messages.create(**kw)
     assert exc.value.status_code == 529
     assert "session account" in exc.value.body["error"]["message"].lower()
+
+
+def test_session_key_with_failover_on_rebinds_fresh(tmp_path, client):
+    import json
+    (tmp_path / "accounts.json").write_text(json.dumps({
+        "version": 1, "pinned": None,
+        "accounts": [
+            _acct("acc-a", "A", str(tmp_path / "healthy-a"), 0),
+            _acct("acc-b", "B", str(tmp_path / "healthy-b"), 1),
+        ]}))
+    sessions.add_key("sk-test-session-key", "t")   # inherits global "auto"
+    scoped = anthropic.Anthropic(base_url=client.base_url,
+                                 api_key="sk-test-session-key", max_retries=0)
+    kw = dict(model="claude-sonnet-4-6", max_tokens=64,
+              messages=[{"role": "user", "content": "ping"}])
+    scoped.messages.create(**kw)
+    assert sessions.get_session_account("sk-test-session-key") == "acc-a"
+    accounts.report_limited("acc-a", "usage limit")
+    # Availability wins: a fresh conversation starts on account B.
+    msg = scoped.messages.create(**kw)
+    assert msg.content[0].text == "pong"
+    assert sessions.get_session_account("sk-test-session-key") == "acc-b"
 
 
 def test_session_rebinds_when_account_deleted(tmp_path, client):

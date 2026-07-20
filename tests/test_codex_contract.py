@@ -11,13 +11,19 @@ import pytest
 
 anthropic = pytest.importorskip("anthropic")
 
-from misanthropic import accounts, history
+from misanthropic import accounts, history, settings
 from misanthropic import claude as claude_mod
 from misanthropic import codex as codex_mod
 from misanthropic import server
 from tests.test_contract import FAKE_CLAUDE
 
 FAKE_CODEX = Path(__file__).parent / "fake_codex.py"
+
+
+@pytest.fixture(autouse=True)
+def _auto_failover(_isolate_state):
+    # The codex-limit tests rely on hopping to the claude account.
+    settings.update({"failover_policy": "auto"})
 
 
 @pytest.fixture()

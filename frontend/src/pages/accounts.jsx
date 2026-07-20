@@ -201,9 +201,11 @@ export function Accounts() {
       </div>
 
       <div class="mb-4 text-[12.5px] leading-relaxed text-mute">
-        Requests serve from the pinned account first, then priority order. When an
-        account hits its usage limit, the next eligible one takes over automatically.
-        Tools, web search and session keys always serve from Claude accounts.
+        Requests serve from the pinned account first, then priority order. What happens
+        at a usage limit is the <a href="#/settings" class="font-medium" style={{ color: 'var(--color-accent-ink)' }}>
+        failover policy</a>: "Auto" hops to the next eligible account, "Stop" (the default)
+        waits for the limit to reset — and each API key can override it. Tools, web search
+        and session keys always serve from Claude accounts.
       </div>
 
       {rows.length === 0 ? (

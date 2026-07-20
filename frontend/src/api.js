@@ -23,6 +23,8 @@ export const api = {
   deleteKey: (key) => req('/admin/keys/delete', { method: 'POST', body: JSON.stringify({ key }) }),
   forgetSession: (key) =>
     req('/admin/sessions/forget', { method: 'POST', body: JSON.stringify({ key }) }),
+  keyFailover: (key, mode) =>
+    req('/admin/keys/failover', { method: 'POST', body: JSON.stringify({ key, mode }) }),
   rescan: () => req('/admin/doctor/rescan', { method: 'POST', body: '{}' }),
   probe: () => req('/admin/doctor/probe', { method: 'POST', body: '{}' }),
   health: () => req('/health'),

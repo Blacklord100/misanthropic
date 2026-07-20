@@ -208,13 +208,17 @@ buffered.*
 ### ⇄ Multiple accounts & the Codex backend
 
 One subscription runs out? Register more — any mix of **Claude** logins and
-**OpenAI Codex** (ChatGPT) logins — and Misanthropic fails over automatically
-the moment the serving account hits its usage limit. Streaming included: the
-stream doesn't start until a working account produced its first token, so
-clients never see the switch. Pin an account to force it, or let priority
-order decide. The dashboard's **Accounts** page shows every account's health,
-who's serving, rate-limit countdowns, and per-account usage; the menu-bar gets
-a picker, the CLI gets `misanthropic accounts`.
+**OpenAI Codex** (ChatGPT) logins. What happens at a usage limit is the
+**failover policy** (Settings): **Stop** (the default) fails the request with
+a clean 529 and waits for the limit to reset; **Auto** hops to the next
+eligible account — streaming included: the stream doesn't start until a
+working account produced its first token, so clients never see the switch.
+Each API key can override the policy, so one project can fail over while
+another insists on its account (for a session key, failing over starts a
+fresh conversation). Pin an account to force it, or let priority order
+decide. The dashboard's **Accounts** page shows every account's health, who's
+serving, rate-limit countdowns, and per-account usage; the menu-bar gets a
+picker, the CLI gets `misanthropic accounts`.
 
 ```bash
 misanthropic accounts add claude --label "Claude — work"

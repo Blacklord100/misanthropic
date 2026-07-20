@@ -12,6 +12,10 @@ Known keys:
   max_concurrency   parallel `claude` process cap (default 8)
   enforce_max_tokens  truncate responses at the request's max_tokens (default off;
                       the count is approximate — see limits.py)
+  codex_model       model passed to codex runs (unset = codex's own default)
+  failover_policy   "auto" = hop to the next eligible account on a usage limit;
+                    "off" (default) = stop at the serving account and 529.
+                    Per-key overrides in keys.json win over this.
 """
 
 import json
@@ -24,7 +28,8 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 _lock = threading.Lock()
 
 _ALLOWED = {"default_model", "web_policy", "onboarded", "retention_days",
-            "max_concurrency", "enforce_max_tokens", "codex_model"}
+            "max_concurrency", "enforce_max_tokens", "codex_model",
+            "failover_policy"}
 
 
 def _settings_path():

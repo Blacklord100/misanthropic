@@ -19,18 +19,20 @@ rate limit.
   in a throwaway per-run workspace (Codex has no system-prompt flag), which
   doubles as a privacy fence: an empty cwd means its read-only sandbox has no
   files to pull into context.
-- **Multiple accounts + automatic failover.** Register any mix of Claude and
-  Codex accounts (Claude via per-account `CLAUDE_CONFIG_DIR` logins —
-  spike-verified isolated; Codex via `CODEX_HOME`). When the serving account
-  hits its usage limit, the next eligible account takes over — including
-  mid-request for streaming: SSE headers aren't sent until the winning
-  account produces its first event, so failover is invisible to clients.
-  Limited accounts cool down with escalating backoff (15 min → 1 h → 4 h,
-  or the explicit reset time when the error names one). Requests that need
-  Claude-only capabilities fail over among Claude accounts only, and 529
-  honestly when none is available — no silent degradation. Sessions stick to
-  the account that created them (continuity wins; if that account is deleted,
-  the key rebinds fresh).
+- **Multiple accounts + policy-driven failover.** Register any mix of Claude
+  and Codex accounts (Claude via per-account `CLAUDE_CONFIG_DIR` logins —
+  spike-verified isolated; Codex via `CODEX_HOME`). At a usage limit the
+  **failover policy** decides: **Stop** (the default — nothing moves unless
+  you pick it) fails with a clean 529 and a retry countdown; **Auto** hands
+  the request to the next eligible account — including mid-request for
+  streaming, where SSE headers aren't sent until the winning account produces
+  its first event, so the switch is invisible. **Per-key overrides**: each
+  API key can force failover on or off regardless of the global setting (a
+  session key that fails over starts a fresh conversation — availability
+  over continuity, per key). Limited accounts cool down with escalating
+  backoff (15 min → 1 h → 4 h, or the explicit reset time when the error
+  names one). Requests that need Claude-only capabilities never degrade to
+  Codex — they 529 honestly when no Claude account is available.
 - **Accounts everywhere.** New dashboard **Accounts** page — per-account
   health, serving badge, rate-limit countdowns, pin/enable/priority, usage
   stats, and copy-paste login commands for adding accounts. Requests page

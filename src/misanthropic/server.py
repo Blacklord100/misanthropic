@@ -500,6 +500,7 @@ class Handler(BaseHTTPRequestHandler):
             "key": k,
             "label": meta.get("label", ""),
             "created": meta.get("created", ""),
+            "failover": meta.get("failover") or "default",
             "turns": sess.get(k, {}).get("turns", 0),
             "requests": stats.get(meta.get("label", ""), {}).get("requests", 0),
             "usd": stats.get(meta.get("label", ""), {}).get("usd", 0.0),
@@ -537,6 +538,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"key": key})
             if path == "/admin/keys/delete":
                 sessions.remove_key(str(body.get("key", "")))
+                history.notify("state")
+                return self._send_json(200, {"ok": True})
+            if path == "/admin/keys/failover":
+                try:
+                    sessions.set_key_failover(str(body.get("key", "")),
+                                              str(body.get("mode", "default")))
+                except KeyError:
+                    return self._send_error(404, "not_found_error", "Unknown key.")
                 history.notify("state")
                 return self._send_json(200, {"ok": True})
             if path == "/admin/sessions/forget":
@@ -678,6 +687,11 @@ class Handler(BaseHTTPRequestHandler):
             "text": True,
         }
 
+        # May THIS request hop accounts on a usage limit? Per-key override
+        # first, else the global failover_policy setting (default: off — never
+        # automatic unless picked).
+        fo = accounts.failover_enabled(sessions.key_failover(key) if key else None)
+
         # Start a request-log entry; finalized in _send_json or the streaming
         # paths' end-of-emit hooks. Visible at GET /admin/requests.
         self._log_start(body, key, linked, use_web, tools=bool(client_tools))
@@ -700,27 +714,28 @@ class Handler(BaseHTTPRequestHandler):
                                      "stateless (sessions+tools unsupported)\n")
                 return self._handle_tools(body, client_tools, tool_choice,
                                           stop_seqs, max_toks, thinking_on,
-                                          slot, caps)
+                                          slot, caps, fo)
 
             # Web mode runs the agentic loop and reshapes its tool blocks into
             # the API's `web_search` content. Stream and non-stream both use it.
             if use_web:
                 if body.get("stream"):
                     return self._stream_web(prompt, model, system, key if linked else None,
-                                            input_format, caps)
+                                            input_format, caps, fo)
                 return self._blocking_web(prompt, model, system, key if linked else None,
-                                          input_format, caps)
+                                          input_format, caps, fo)
 
             if body.get("stream"):
                 return self._stream_messages(prompt, model, system, key if linked else None, input_format,
                                              stop_seqs=stop_seqs, max_toks=max_toks,
                                              thinking=thinking_on, caps=caps,
-                                             codex_payload=(codex_text, image_blocks))
+                                             codex_payload=(codex_text, image_blocks),
+                                             fo=fo)
 
             if linked:
                 return self._blocking_session(prompt, model, system, key, input_format,
                                               stop_seqs=stop_seqs, max_toks=max_toks,
-                                              thinking=thinking_on, caps=caps)
+                                              thinking=thinking_on, caps=caps, fo=fo)
 
             # Stateless blocking: full failover across eligible accounts,
             # dispatched per backend.
@@ -742,7 +757,7 @@ class Handler(BaseHTTPRequestHandler):
                 msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
                 return limits.apply_to_message(msg, stop_seqs, max_toks)
 
-            result, err = self._attempt_accounts(caps, attempt)
+            result, err = self._attempt_accounts(caps, attempt, fo)
             if err is not None:
                 return self._send_error(*err)
             self._send_json(200, result)
@@ -779,13 +794,42 @@ class Handler(BaseHTTPRequestHandler):
             self._log_rec["account"] = acc["label"]
             self._log_rec["backend"] = acc["backend"]
 
-    def _attempt_accounts(self, caps, attempt):
-        """Run `attempt(account)` against eligible accounts in order, failing
-        over on usage-limit/auth errors. Returns (result, None) on success or
-        (None, (status, etype, message)) — the caller sends, never this."""
-        order = accounts.eligible(caps)
-        if not order:
+    def _routing_candidates(self, caps, fo):
+        """The accounts this request may try, per the failover policy.
+        Failover on: every eligible account, in order. Failover off: exactly
+        the first-choice (pinned/priority) account — and when it's cooling or
+        logged out, an up-front 529/401 instead of a doomed run.
+        Returns (candidates, None) or (None, (status, etype, message))."""
+        if fo:
+            order = accounts.eligible(caps)
+            if not order:
+                return None, self._no_accounts_error(caps)
+            return order, None
+        acc = accounts.first_choice(caps)
+        if acc is None:
             return None, self._no_accounts_error(caps)
+        if accounts.cooling(acc["id"]):
+            cds, _ = accounts.cooldown_state()
+            left = (cds.get(acc["id"]) or {}).get("seconds_left", 0)
+            return None, (529, "overloaded_error",
+                          f"{acc['label']} is rate-limited (retry in ~{max(60, left)}s) "
+                          "and failover is off — enable it in Settings or per key.")
+        _, logged_out = accounts.cooldown_state()
+        if acc["id"] in logged_out:
+            return None, (401, "authentication_error",
+                          f"{acc['label']} is logged out: "
+                          f"{logged_out[acc['id']].get('detail', '')}")
+        return [acc], None
+
+    def _attempt_accounts(self, caps, attempt, fo=False):
+        """Run `attempt(account)` against the allowed candidates, failing over
+        on usage-limit/auth errors when the policy permits (a single-candidate
+        list degrades naturally to try-once-and-report). Returns
+        (result, None) on success or (None, (status, etype, message)) — the
+        caller sends, never this."""
+        order, err = self._routing_candidates(caps, fo)
+        if err is not None:
+            return None, err
         last = None
         for acc in order:
             try:
@@ -802,29 +846,37 @@ class Handler(BaseHTTPRequestHandler):
         status, etype = classify_claude_error(str(last))
         return None, (status, etype, str(last))
 
-    def _resolve_session_account(self, key, caps):
+    def _resolve_session_account(self, key, caps, fo=False):
         """The account a key-linked session must run on. Sessions are
         account-bound (a claude session id only resumes under the login that
-        created it), so a cooling bound account means 529 — continuity wins
-        over failover. A deleted/disabled bound account is the one case where
-        continuity is impossible: forget the session and rebind fresh.
+        created it), so a cooling bound account normally means 529 —
+        continuity wins. With failover ON for this key, availability wins
+        instead: the session is forgotten and rebinds fresh on the next
+        account (new conversation). A deleted/disabled bound account always
+        rebinds — continuity is impossible there.
         Returns (account, None) or (None, (status, etype, message))."""
         aid = sessions.get_session_account(key)
         acc = accounts.get(aid) if aid else None
         if acc is not None and acc.get("enabled", True):
             if accounts.cooling(acc["id"]):
-                cds, _ = accounts.cooldown_state()
-                left = (cds.get(acc["id"]) or {}).get("seconds_left", 0)
-                return None, (529, "overloaded_error",
-                              f"This key's session account ({acc['label']}) is "
-                              f"rate-limited; retry in ~{max(60, left)}s.")
-            return acc, None
-        if aid:  # bound account is gone/disabled — the old session can't resume
+                if fo:
+                    sessions.forget_session(key)  # fresh conversation elsewhere
+                    acc = None
+                else:
+                    cds, _ = accounts.cooldown_state()
+                    left = (cds.get(acc["id"]) or {}).get("seconds_left", 0)
+                    return None, (529, "overloaded_error",
+                                  f"This key's session account ({acc['label']}) is "
+                                  f"rate-limited; retry in ~{max(60, left)}s "
+                                  "(this key has failover off).")
+            if acc is not None:
+                return acc, None
+        elif aid:  # bound account is gone/disabled — the old session can't resume
             sessions.forget_session(key)
-        order = accounts.eligible(caps)
-        if not order:
-            return None, self._no_accounts_error(caps)
-        return order[0], None
+        candidates, err = self._routing_candidates(caps, fo)
+        if err is not None:
+            return None, err
+        return candidates[0], None
 
     def _open_stream(self, candidates, make_gen):
         """The streaming failover trick: pull each candidate's generator until
@@ -866,7 +918,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---- client tool use (function calling) --------------------------------
 
     def _handle_tools(self, body, tools, tool_choice, stop_seqs, max_toks,
-                      thinking, slot, caps=None):
+                      thinking, slot, caps=None, fo=False):
         """Route a tools request: continue a parked run when the last message
         is its matching tool_result set, else start a fresh shim run (which is
         also the recovery path for an expired/dead park — the client resends
@@ -912,9 +964,9 @@ class Handler(BaseHTTPRequestHandler):
             # tool calls/results, into the prompt.
 
         input_format, prompt = translate.build_cli_input(body.get("messages") or [])
-        order = accounts.eligible(caps)
-        if not order:
-            return self._send_error(*self._no_accounts_error(caps or {"tools": True}))
+        order, err = self._routing_candidates(caps or {"tools": True}, fo)
+        if err is not None:
+            return self._send_error(*err)
         last = None
         for acc in order:
             try:
@@ -1161,14 +1213,15 @@ class Handler(BaseHTTPRequestHandler):
             if lock:
                 lock.release()
 
-    def _web_result(self, prompt, model, system, key, input_format, caps):
+    def _web_result(self, prompt, model, system, key, input_format, caps, fo=False):
         """(blocks, wrapper) for a web run with account routing: stateless
-        requests fail over across Claude accounts; linked ones are bound to
-        the session's account. Returns (result, None) or (None, err_tuple)."""
+        requests fail over across Claude accounts (policy permitting); linked
+        ones are bound to the session's account. Returns (result, None) or
+        (None, err_tuple)."""
         if key is None:
             return self._attempt_accounts(caps, lambda acc: self._run_web_linked(
-                prompt, model, system, None, input_format, account=acc))
-        acc, err = self._resolve_session_account(key, caps)
+                prompt, model, system, None, input_format, account=acc), fo)
+        acc, err = self._resolve_session_account(key, caps, fo)
         if err is not None:
             return None, err
         try:
@@ -1183,19 +1236,19 @@ class Handler(BaseHTTPRequestHandler):
         return result, None
 
     def _blocking_web(self, prompt, model, system, key, input_format="text",
-                      caps=None):
-        result, err = self._web_result(prompt, model, system, key, input_format, caps)
+                      caps=None, fo=False):
+        result, err = self._web_result(prompt, model, system, key, input_format, caps, fo)
         if err is not None:
             return self._send_error(*err)
         blocks, wrapper = result
         self._send_json(200, translate.web_message(blocks, wrapper, model))
 
     def _stream_web(self, prompt, model, system, key, input_format="text",
-                    caps=None):
+                    caps=None, fo=False):
         # The web run is buffered (the agentic loop can't be a single live
         # stream), so do the work first; a failure here can still be a clean
         # JSON error since no SSE headers have been sent yet.
-        result, err = self._web_result(prompt, model, system, key, input_format, caps)
+        result, err = self._web_result(prompt, model, system, key, input_format, caps, fo)
         if err is not None:
             return self._send_error(*err)
         blocks, wrapper = result
@@ -1243,44 +1296,55 @@ class Handler(BaseHTTPRequestHandler):
             self._log_finalize(500, error_msg=str(e))
 
     def _blocking_session(self, prompt, model, system, key, input_format="text",
-                          stop_seqs=None, max_toks=None, thinking=False, caps=None):
+                          stop_seqs=None, max_toks=None, thinking=False, caps=None,
+                          fo=False):
         """Run linked to the key's session: resume it, persist, serialize.
 
-        Sessions are account-bound — no failover here (continuity wins), but
-        limit/auth failures still update the account's runtime state so other
-        traffic routes around it."""
-        acc, err = self._resolve_session_account(key, caps)
-        if err is not None:
-            return self._send_error(*err)
+        Sessions are account-bound; with failover ON for this key a limited
+        bound account rebinds fresh (availability over continuity), otherwise
+        it 529s. Limit/auth failures always update the account's runtime
+        state so other traffic routes around it."""
         cwd = str(sessions.WORKSPACE)
-        blocks = None
-
-        def _run(resume):
-            out = run_blocking(prompt, model=model, system=system,
-                               resume=resume, persist=True, cwd=cwd,
-                               input_format=input_format, collect_blocks=thinking,
-                               account=acc)
-            return out if thinking else (out, None)
 
         with sessions.key_lock(key):
-            resume_id = sessions.get_session_id(key)
-            try:
-                wrapper, blocks = _run(resume_id)
-            except ClaudeError as e:
-                # Only start over if the session id is genuinely bad — a transient
-                # error (rate limit, backend hiccup) must NOT destroy the link.
-                if not resume_id or not _is_invalid_session_error(str(e)):
-                    self._note_backend_failure(acc, str(e))
-                    return self._send_claude_error(e)
-                sessions.forget_session(key)
+            # With failover on, a limit/auth failure re-resolves (the failed
+            # account is cooling now, so the next resolve lands elsewhere).
+            for attempt in range(max(1, len(accounts.list_accounts()))):
+                acc, err = self._resolve_session_account(key, caps, fo)
+                if err is not None:
+                    return self._send_error(*err)
+                blocks = None
+
+                def _run(resume):
+                    out = run_blocking(prompt, model=model, system=system,
+                                       resume=resume, persist=True, cwd=cwd,
+                                       input_format=input_format,
+                                       collect_blocks=thinking, account=acc)
+                    return out if thinking else (out, None)
+
+                resume_id = sessions.get_session_id(key)
                 try:
-                    wrapper, blocks = _run(None)
-                except ClaudeError as e2:
-                    self._note_backend_failure(acc, str(e2))
-                    return self._send_claude_error(e2)
-            sid = wrapper.get("session_id")
-            if sid:
-                sessions.record_session(key, sid, account_id=acc["id"])
+                    try:
+                        wrapper, blocks = _run(resume_id)
+                    except ClaudeError as e:
+                        # Only start over if the session id is genuinely bad —
+                        # a transient error must NOT destroy the link.
+                        if not resume_id or not _is_invalid_session_error(str(e)):
+                            raise
+                        sessions.forget_session(key)
+                        wrapper, blocks = _run(None)
+                except ClaudeError as e:
+                    retryable = self._note_backend_failure(acc, str(e))
+                    if fo and retryable:
+                        continue
+                    return self._send_claude_error(e)
+                sid = wrapper.get("session_id")
+                if sid:
+                    sessions.record_session(key, sid, account_id=acc["id"])
+                break
+            else:
+                return self._send_error(529, "overloaded_error",
+                                        "All accounts are rate-limited or unavailable.")
         accounts.report_ok(acc["id"])
         self._record_serving(acc)
         msg = translate.wrapper_to_message(wrapper, model, blocks=blocks)
@@ -1288,22 +1352,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream_messages(self, prompt, model, system, key, input_format="text",
                          stop_seqs=None, max_toks=None, thinking=False, caps=None,
-                         codex_payload=None):
+                         codex_payload=None, fo=False):
         """Streaming with account routing. _open_stream pulls each candidate
         generator to its first real event BEFORE any bytes ship, so a
-        rate-limited account fails over invisibly; only a committed stream
-        gets SSE headers."""
+        rate-limited account fails over invisibly (when the policy allows);
+        only a committed stream gets SSE headers."""
         lock = sessions.key_lock(key) if key else None
         if lock:
             lock.acquire()
         try:
+            bound = None
             if key:
-                acc, err = self._resolve_session_account(key, caps)
+                # With failover on, every account this key could rebind to is
+                # a candidate — _open_stream marks failures cooling, and the
+                # session binds to whichever account commits the stream.
+                bound, err = self._resolve_session_account(key, caps, fo)
                 if err is not None:
                     return self._send_error(*err)
-                candidates = [acc]
+                if fo:
+                    candidates = [bound] + [a for a in accounts.eligible(caps)
+                                            if a["id"] != bound["id"]]
+                else:
+                    candidates = [bound]
             else:
-                candidates = accounts.eligible(caps)
+                candidates, err = self._routing_candidates(caps, fo)
+                if err is not None:
+                    return self._send_error(*err)
             resume_id = sessions.get_session_id(key) if key else None
 
             def make_gen(a):
@@ -1315,9 +1389,12 @@ class Handler(BaseHTTPRequestHandler):
                     return codex_mod.stream_shim(text, model, system=system,
                                                  images=images, thinking=thinking,
                                                  account=a)
+                # A session id only resumes under the account that created it;
+                # a failed-over candidate starts fresh.
+                resume = resume_id if (bound and a["id"] == bound["id"]) else None
                 return stream_events(
                     prompt, model=model, system=system,
-                    resume=resume_id, persist=bool(key),
+                    resume=resume, persist=bool(key),
                     cwd=str(sessions.WORKSPACE) if key else None,
                     input_format=input_format, account=a)
 
