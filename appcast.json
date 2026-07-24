@@ -2,7 +2,7 @@
   "version": "1.4.0",
   "download_page": "https://github.com/Blacklord100/misanthropic/releases/tag/v1.4.0",
   "dmg_url": "https://github.com/Blacklord100/misanthropic/releases/download/v1.4.0/Misanthropic-1.4.0.dmg",
-  "sha256": "7fa7ca67dff38b0c6f6d5aa0bab588294b584a02654f461f65bad9806bf46daa",
+  "sha256": "aca70ee6bc9d4957b381315036d0d64b99fb6d61402a37390002b588102e5e3d",
   "notes": "Parallel load-balancing: put every account to work, not just the first one.\n\n- **Balanced dispatch across accounts.** With failover on and more than one\n  account eligible, requests now spread across accounts \u2014 each one goes to the\n  least-loaded account instead of piling onto priority #1. The cloud-side\n  per-account rate limit (the real throughput ceiling) is reached N\u00d7 slower,\n  and standby accounts do real work rather than waiting for #1 to break.\n  Selection and the in-flight increment are ",
   "min_macos": "11.0"
 }
