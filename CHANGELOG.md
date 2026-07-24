@@ -7,6 +7,25 @@ with the `.dmg`, `.whl`, and `.tar.gz` attached.
 > **Renamed in v0.8.0:** this project was previously called **Breakthrough**.
 > Same trick, sharper name.
 
+## v1.4.0 — 2026-07-24
+Parallel load-balancing: put every account to work, not just the first one.
+
+- **Balanced dispatch across accounts.** With failover on and more than one
+  account eligible, requests now spread across accounts — each one goes to the
+  least-loaded account instead of piling onto priority #1. The cloud-side
+  per-account rate limit (the real throughput ceiling) is reached N× slower,
+  and standby accounts do real work rather than waiting for #1 to break.
+  Selection and the in-flight increment are atomic, so concurrent requests
+  can't stampede one account; equal-load accounts rotate round-robin. A
+  **pinned account always wins** over balancing, and cooling/logged-out
+  accounts are never chosen. New **Dispatch strategy** setting —
+  **Balanced** (default) or **Failover** (strict priority order) — with a
+  per-account "running now" count on the Accounts page.
+- **Concurrency auto-scales with account count.** CLI runs are I/O-bound
+  (they just wait on the cloud), so the local process cap is a RAM/process
+  guard, not a CPU one. It now defaults to 8 per enabled account, capped at
+  30, unless you set `max_concurrency` explicitly.
+
 ## v1.3.0 — 2026-07-20
 Multi-backend, multi-account: run on several subscriptions and never notice a
 rate limit.
