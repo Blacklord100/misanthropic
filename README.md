@@ -217,8 +217,21 @@ Each API key can override the policy, so one project can fail over while
 another insists on its account (for a session key, failing over starts a
 fresh conversation). Pin an account to force it, or let priority order
 decide. The dashboard's **Accounts** page shows every account's health, who's
-serving, rate-limit countdowns, and per-account usage; the menu-bar gets a
-picker, the CLI gets `misanthropic accounts`.
+serving, rate-limit countdowns, per-account usage, and how many runs each is
+handling right now; the menu-bar gets a picker, the CLI gets `misanthropic
+accounts`.
+
+**Load-balancing (dispatch strategy).** With failover on and more than one
+account eligible, the **Balanced** strategy *(default)* spreads concurrent
+runs across accounts — each new request goes to the least-loaded one — so the
+cloud-side per-account rate limit (the real throughput ceiling) is reached N×
+slower and standby accounts do real work instead of waiting for #1 to break.
+Switch to **Failover** to keep strict priority order (ride #1 until it hits a
+limit, then hop). A pinned account always wins over balancing. Because CLI runs
+are I/O-bound — each just waits on the cloud — the local process cap
+(`max_concurrency`) is a RAM/process guard, not a CPU one, so it auto-scales
+with the number of accounts (8 per account, capped at 30) unless you set it
+explicitly.
 
 ```bash
 misanthropic accounts add claude --label "Claude — work"

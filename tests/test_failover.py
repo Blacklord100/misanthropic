@@ -20,9 +20,13 @@ from tests.test_contract import FAKE_CLAUDE
 
 @pytest.fixture(autouse=True)
 def _auto_failover(_isolate_state):
-    """These tests exercise the failover machinery, so opt into it (the
-    shipped default is 'off' — see test_failover_policy.py)."""
-    settings.update({"failover_policy": "auto"})
+    """These tests exercise the strict-priority failover machinery (bad account
+    is tried, cools, then the next serves), so opt into failover AND pin the
+    "failover" dispatch strategy — the shipped default is "balanced", which may
+    legitimately skip a limited account rather than try-and-cool it (see
+    test_balancing.py for that path). Failover default is 'off' — see
+    test_failover_policy.py."""
+    settings.update({"failover_policy": "auto", "dispatch_strategy": "failover"})
 
 
 def _acct(aid, label, path, priority):

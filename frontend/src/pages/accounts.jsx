@@ -96,6 +96,13 @@ function AccountCard({ acc, count, onChanged }) {
                   Serving
                 </span>
               )}
+              {acc.inflight > 0 && (
+                <span class="tnum rounded px-1.5 py-0.5 text-[10.5px] font-semibold"
+                      title="Runs this account is handling right now"
+                      style={{ background: 'color-mix(in oklab, var(--color-accent) 15%, transparent)', color: 'var(--color-accent)' }}>
+                  {acc.inflight} running
+                </span>
+              )}
             </div>
             <div class="mt-1 text-[12px] text-mute">
               {st.text}

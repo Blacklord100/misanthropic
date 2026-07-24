@@ -38,6 +38,8 @@ _STRIKE_WINDOW_S = 7200.0  # strikes older than this don't escalate
 _lock = threading.Lock()
 _cooldowns = {}   # id -> {"until": float, "reason": str, "strikes": int, "last_hit": float}
 _logged_out = {}  # id -> {"detail": str, "at": float}
+_inflight = {}    # id -> concurrent runs currently dispatched to this account
+_rr_counter = 0   # rotating tiebreak so equal-load accounts spread round-robin
 
 DEFAULT_ACCOUNT = {
     "id": "claude-default",
@@ -292,6 +294,94 @@ def claude_only(caps):
     return not backend_supports("codex", caps)
 
 
+# ---- load balancing (per-account in-flight tracking) -------------------------
+#
+# Failover alone leaves accounts #2/#3 on the bench until #1 hits a limit.
+# Balanced dispatch instead spreads concurrent runs across every eligible
+# account so the cloud-side per-account rate limit — the real throughput
+# ceiling — is reached N times slower. We track how many runs are dispatched to
+# each account right now; the router prefers the least-loaded one. This is a
+# LOAD signal, not a cap: the global Governor still bounds total local
+# processes (a RAM/process guard, since CLI runs are I/O-bound, not CPU-bound).
+
+def acquire_inflight(account_id):
+    """Count one more run against this account (streaming commit path, where
+    selection already happened inside the stream's failover)."""
+    with _lock:
+        _inflight[account_id] = _inflight.get(account_id, 0) + 1
+
+
+def release(account_id):
+    """Drop one in-flight run for this account. Pairs with reserve() /
+    acquire_inflight()."""
+    with _lock:
+        n = _inflight.get(account_id, 0) - 1
+        if n > 0:
+            _inflight[account_id] = n
+        else:
+            _inflight.pop(account_id, None)
+
+
+def inflight_counts():
+    """Snapshot {account_id: concurrent runs} for the dashboard and selection."""
+    with _lock:
+        return dict(_inflight)
+
+
+def reserve(caps=None, exclude=()):
+    """Atomically pick the least-loaded eligible account (skipping `exclude`)
+    and count a run against it. Ties break by priority (eligible() order), then
+    a rotating counter so equal-load accounts alternate. Returns the account, or
+    None when nothing is eligible. Selection + increment happen under one lock,
+    re-reading live counts, so concurrent callers can't stampede one account.
+    Every reserve() must be paired with a release()."""
+    global _rr_counter
+    candidates = [a for a in eligible(caps) if a["id"] not in exclude]
+    if not candidates:
+        return None
+    pin = pinned()   # an explicit pin overrides load — the user picked this account
+    with _lock:
+        if pin:
+            for a in candidates:
+                if a["id"] == pin:
+                    _inflight[a["id"]] = _inflight.get(a["id"], 0) + 1
+                    return a
+        floor = min(_inflight.get(a["id"], 0) for a in candidates)
+        least = [a for a in candidates if _inflight.get(a["id"], 0) == floor]
+        _rr_counter += 1
+        chosen = least[_rr_counter % len(least)]
+        _inflight[chosen["id"]] = _inflight.get(chosen["id"], 0) + 1
+        return chosen
+
+
+def balanced_order(caps=None, exclude=()):
+    """Eligible accounts, least-loaded first — priority-stable within a load
+    tier, with the least-loaded tier rotated for round-robin spread. Used where
+    a full ordered candidate list is needed up front (streaming failover pulls
+    each candidate to its first event); the increment there rides
+    acquire_inflight() once a stream commits."""
+    global _rr_counter
+    order = [a for a in eligible(caps) if a["id"] not in exclude]
+    if len(order) <= 1:
+        return order
+    with _lock:
+        counts = {a["id"]: _inflight.get(a["id"], 0) for a in order}
+        _rr_counter += 1
+        rot = _rr_counter
+    order.sort(key=lambda a: counts[a["id"]])   # stable: keeps priority within a tier
+    floor = counts[order[0]["id"]]
+    head = [a for a in order if counts[a["id"]] == floor]
+    tail = [a for a in order if counts[a["id"]] != floor]
+    if len(head) > 1:
+        k = rot % len(head)
+        head = head[k:] + head[:k]
+    result = head + tail
+    pin = pinned()   # an explicit pin overrides load — keep it first
+    if pin:
+        result.sort(key=lambda a: a["id"] != pin)   # stable: pinned to front
+    return result
+
+
 # ---- error classification & cooldown bookkeeping -----------------------------
 
 # Account-exhaustion signals. Deliberately EXCLUDES "overloaded"/"capacity"/
@@ -407,6 +497,9 @@ def _notify():
 
 def _reset():
     """Tests: drop all runtime state."""
+    global _rr_counter
     with _lock:
         _cooldowns.clear()
         _logged_out.clear()
+        _inflight.clear()
+        _rr_counter = 0
