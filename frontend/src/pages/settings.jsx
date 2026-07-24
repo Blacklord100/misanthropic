@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { api, useData } from '../api'
 import { setTheme, themePref } from '../theme.js'
 import { Field, Segmented, Skeleton, useToast } from '../components.jsx'
@@ -11,6 +11,49 @@ function Row({ title, hint, children }) {
         {hint && <div class="mt-1 text-[12px] leading-relaxed text-mute">{hint}</div>}
       </div>
       <div class="shrink-0 pt-0.5">{children}</div>
+    </div>
+  )
+}
+
+// Exact codex -m ids. gpt-5.5 is the single 5.5 frontier model; 5.6 is the
+// tiered family — Sol (flagship), Terra (balanced), Luna (fast/cheap).
+// Chips fill the field below; anything else is free-text.
+const CODEX_PRESETS = [
+  { id: 'gpt-5.5', label: '5.5' },
+  { id: 'gpt-5.6-sol', label: 'Sol' },
+  { id: 'gpt-5.6-terra', label: 'Terra' },
+  { id: 'gpt-5.6-luna', label: 'Luna' },
+]
+
+function CodexModel({ value, onSave }) {
+  const [val, setVal] = useState(value || '')
+  useEffect(() => setVal(value || ''), [value])
+  const pick = (id) => { setVal(id); if (id !== (value || '')) onSave(id) }
+  return (
+    <div class="flex flex-col items-end gap-1.5">
+      <div class="flex gap-1">
+        {CODEX_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            class={`btn !h-7 text-[11.5px] ${val === p.id ? 'btn-primary' : 'btn-ghost'}`}
+            title={p.id}
+            onClick={() => pick(p.id)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <input
+        class="input w-44"
+        placeholder="codex default"
+        value={val}
+        onInput={(e) => setVal(e.target.value)}
+        onBlur={(e) => {
+          const v = e.target.value.trim()
+          if (v !== (value || '')) onSave(v)
+        }}
+        onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+      />
     </div>
   )
 }
@@ -91,17 +134,11 @@ export function Settings() {
         </Row>
         <Row
           title="Codex model"
-          hint="Model passed to codex runs (-m). Empty uses codex's built-in default. Shown as codex:<model> in the request log — codex never runs the requested Claude model."
+          hint="Model passed to codex runs (-m). Pick a GPT-5.6 tier or type any codex model; empty uses codex's built-in default. Shown as codex:<model> in the request log — codex never runs the requested Claude model."
         >
-          <input
-            class="input w-44"
-            placeholder="codex default"
-            defaultValue={data.settings?.codex_model || ''}
-            onBlur={(e) => {
-              const v = e.target.value.trim()
-              if (v !== (data.settings?.codex_model || '')) save({ codex_model: v }, 'Codex model saved')
-            }}
-            onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+          <CodexModel
+            value={data.settings?.codex_model || ''}
+            onSave={(v) => save({ codex_model: v }, `Codex model: ${v || 'default'}`)}
           />
         </Row>
         <Row
@@ -114,6 +151,19 @@ export function Settings() {
             options={[
               { value: 'off', label: 'Stop' },
               { value: 'auto', label: 'Auto' },
+            ]}
+          />
+        </Row>
+        <Row
+          title="Dispatch strategy"
+          hint='When failover is on and several accounts are eligible: "Balanced" spreads concurrent runs across accounts (least-loaded first) so no single account is exhausted; "Failover" keeps strict priority order, only hopping on a usage limit. A pinned account always serves first regardless.'
+        >
+          <Segmented
+            value={data.settings?.dispatch_strategy === 'failover' ? 'failover' : 'balanced'}
+            onChange={(v) => save({ dispatch_strategy: v }, `Dispatch: ${v}`)}
+            options={[
+              { value: 'balanced', label: 'Balanced' },
+              { value: 'failover', label: 'Failover' },
             ]}
           />
         </Row>
@@ -132,16 +182,16 @@ export function Settings() {
         </Row>
         <Row
           title="Concurrency"
-          hint="How many Claude processes may run at once. Extra requests queue briefly, then get the API's 529 so SDKs retry with backoff. Applies immediately."
+          hint="How many CLI processes may run at once. CLI runs are I/O-bound (they wait on the cloud), so this is a RAM/process guard — it auto-scales with account count (8 each, capped at 30) unless set here. Extra requests queue briefly, then get the API's 529 so SDKs retry with backoff. Applies immediately."
         >
           <Segmented
             value={String(data.max_concurrency)}
             onChange={(v) => save({ max_concurrency: Number(v) }, `Concurrency: ${v}`)}
             options={[
-              { value: '2', label: '2' },
               { value: '4', label: '4' },
               { value: '8', label: '8' },
               { value: '16', label: '16' },
+              { value: '30', label: '30' },
             ]}
           />
         </Row>

@@ -62,7 +62,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 # immediately wakes queued waiters, lowering it drains naturally as in-flight
 # runs finish. Startup order: MISANTHROPIC_MAX_CONCURRENCY env wins, then the
 # persisted setting (applied in make_httpd), then the default of 8.
-DEFAULT_MAX_CONCURRENCY = 8
+DEFAULT_MAX_CONCURRENCY = 8      # per-account budget; the startup default when 1 account
+MAX_CONCURRENCY_CAP = 30         # machine ceiling: CLI runs are I/O-bound, so this is a
+                                 # RAM/process guard, not a CPU one — safe to scale with accounts
 QUEUE_WAIT_S = float(os.environ.get("MISANTHROPIC_QUEUE_WAIT_MS", "30000")) / 1000.0
 
 
@@ -93,7 +95,7 @@ class Governor:
 
     def set_limit(self, n):
         with self._cond:
-            self._limit = max(1, min(int(n), 64))
+            self._limit = max(1, min(int(n), MAX_CONCURRENCY_CAP))
             self._cond.notify_all()
         return self._limit
 
@@ -114,6 +116,25 @@ def requests_in_flight():
     """How many CLI runs hold a governor slot right now. The auto-updater uses
     this to swap the bundle only when nothing would be killed mid-generation."""
     return _governor.in_flight
+
+
+def autoscale_concurrency():
+    """Default the machine cap to the per-account budget times the number of
+    enabled accounts, clamped to MAX_CONCURRENCY_CAP. CLI runs sit idle on a
+    socket waiting for the cloud, so the binding local limit is RAM/process
+    count, not CPU — more accounts safely buy more parallelism. Called at
+    startup only when the user hasn't pinned max_concurrency (env or setting)."""
+    n = sum(1 for a in accounts.list_accounts() if a.get("enabled", True))
+    return _governor.set_limit(min(DEFAULT_MAX_CONCURRENCY * max(1, n),
+                                   MAX_CONCURRENCY_CAP))
+
+
+def _balanced_dispatch():
+    """Whether to spread load across eligible accounts (vs strict priority
+    order). Only ever consulted when a request may fail over — a request pinned
+    to one account can't balance anyway. Default on."""
+    from . import settings
+    return settings.get("dispatch_strategy", "balanced") != "failover"
 
 
 def classify_claude_error(message):
@@ -486,6 +507,7 @@ class Handler(BaseHTTPRequestHandler):
                     merged[k] = merged.get(k, 0) + v
         serving = accounts.serving({"text": True})
         pinned = accounts.pinned()
+        inflight = accounts.inflight_counts()
         rows = []
         for position, acc in enumerate(accounts.list_accounts()):
             st = status_by_id.get(acc["id"], {})
@@ -505,8 +527,10 @@ class Handler(BaseHTTPRequestHandler):
                 "detail": st.get("detail", ""),
                 "cooldown": cds.get(acc["id"]),
                 "stats": stats.get(acc["label"], {}),
+                "inflight": inflight.get(acc["id"], 0),
             })
-        return {"accounts": rows, "backends": snap["backends"], "pinned": pinned}
+        return {"accounts": rows, "backends": snap["backends"], "pinned": pinned,
+                "max_concurrency": _governor.limit}
 
     def _admin_state(self):
         detail = sessions.keys_detail()
@@ -872,12 +896,45 @@ class Handler(BaseHTTPRequestHandler):
                           f"{logged_out[acc['id']].get('detail', '')}")
         return [acc], None
 
+    def _attempt_balanced(self, caps, attempt):
+        """Failover ON + balanced strategy: reserve the least-loaded eligible
+        account, run, and on a usage-limit/auth failure release it, exclude it,
+        and reserve the next — spreading concurrent load across accounts instead
+        of piling every request onto priority #1. Same return contract as
+        _attempt_accounts."""
+        tried = set()
+        last = None
+        while True:
+            acc = accounts.reserve(caps, exclude=tried)
+            if acc is None:
+                break
+            try:
+                result = attempt(acc)
+            except BackendError as e:
+                accounts.release(acc["id"])
+                tried.add(acc["id"])
+                if self._note_backend_failure(acc, str(e)):
+                    last = e
+                    continue
+                status, etype = classify_claude_error(str(e))
+                return None, (status, etype, str(e))
+            accounts.release(acc["id"])
+            accounts.report_ok(acc["id"])
+            self._record_serving(acc)
+            return result, None
+        if last is not None:
+            status, etype = classify_claude_error(str(last))
+            return None, (status, etype, str(last))
+        return None, self._no_accounts_error(caps)
+
     def _attempt_accounts(self, caps, attempt, fo=False):
         """Run `attempt(account)` against the allowed candidates, failing over
         on usage-limit/auth errors when the policy permits (a single-candidate
         list degrades naturally to try-once-and-report). Returns
         (result, None) on success or (None, (status, etype, message)) — the
         caller sends, never this."""
+        if fo and _balanced_dispatch():
+            return self._attempt_balanced(caps, attempt)
         order, err = self._routing_candidates(caps, fo)
         if err is not None:
             return None, err
@@ -1492,6 +1549,13 @@ class Handler(BaseHTTPRequestHandler):
                                             if a["id"] != bound["id"]]
                 else:
                     candidates = [bound]
+            elif fo and _balanced_dispatch():
+                # Spread across eligible accounts, least-loaded first.
+                # _open_stream still fails over down the list; the committed
+                # account is counted for the stream's lifetime below.
+                candidates = accounts.balanced_order(caps)
+                if not candidates:
+                    return self._send_error(*self._no_accounts_error(caps))
             else:
                 candidates, err = self._routing_candidates(caps, fo)
                 if err is not None:
@@ -1519,8 +1583,15 @@ class Handler(BaseHTTPRequestHandler):
             acc, events, err = self._open_stream(candidates, make_gen)
             if events is None:
                 return self._send_error(*err)
-            self._emit_stream(events, key, resume_id, acc,
-                              stop_seqs, max_toks, thinking)
+            # Count the committed account in-flight for the whole stream so
+            # concurrent dispatch sees it as loaded (selection already happened
+            # inside _open_stream's failover).
+            accounts.acquire_inflight(acc["id"])
+            try:
+                self._emit_stream(events, key, resume_id, acc,
+                                  stop_seqs, max_toks, thinking)
+            finally:
+                accounts.release(acc["id"])
         finally:
             if lock:
                 lock.release()

@@ -53,4 +53,4 @@ def test_governor_resize_wakes_waiters():
     assert g.in_flight == 2
     g.release(); g.release()
     assert g.in_flight == 0
-    assert g.set_limit(999) == 64             # clamped
+    assert g.set_limit(999) == 30             # clamped to MAX_CONCURRENCY_CAP

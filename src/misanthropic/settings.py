@@ -16,6 +16,10 @@ Known keys:
   failover_policy   "auto" = hop to the next eligible account on a usage limit;
                     "off" (default) = stop at the serving account and 529.
                     Per-key overrides in keys.json win over this.
+  dispatch_strategy "balanced" (default) = when failover is on and several
+                    accounts are eligible, spread concurrent runs across them
+                    (least-loaded first) so no single account is exhausted;
+                    "failover" = strict priority order, only hopping on a limit.
 """
 
 import json
@@ -29,7 +33,7 @@ _lock = threading.Lock()
 
 _ALLOWED = {"default_model", "web_policy", "onboarded", "retention_days",
             "max_concurrency", "enforce_max_tokens", "codex_model",
-            "failover_policy"}
+            "failover_policy", "dispatch_strategy"}
 
 
 def _settings_path():
@@ -72,10 +76,13 @@ def apply_startup():
     if ("MISANTHROPIC_MODEL" not in os.environ and "MODEL" not in os.environ
             and data.get("default_model")):
         claude.DEFAULT_MODEL = str(data["default_model"])
-    if ("MISANTHROPIC_MAX_CONCURRENCY" not in os.environ
-            and data.get("max_concurrency")):
+    if "MISANTHROPIC_MAX_CONCURRENCY" not in os.environ:
         from . import server
-        try:
-            server._governor.set_limit(int(data["max_concurrency"]))
-        except (TypeError, ValueError):
-            pass
+        if data.get("max_concurrency"):
+            try:
+                server._governor.set_limit(int(data["max_concurrency"]))
+            except (TypeError, ValueError):
+                pass
+        else:
+            # No explicit cap: scale the machine guard with account count.
+            server.autoscale_concurrency()
